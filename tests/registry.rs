@@ -208,29 +208,76 @@ fn concurrent_updates_lose_nothing() {
 }
 
 #[test]
-fn stall_default_overflow_is_an_error() {
+fn huge_interval_is_rejected_without_panicking() {
     let huge = RepoEntry {
         interval: Some("18446744073709551615s".to_owned()),
         ..entry("huge", Path::new("/x/huge"))
     };
-    let err = huge.settings().expect_err("3 x interval overflows");
-    assert!(
-        matches!(err, RegistryError::StallThresholdOverflow { .. }),
-        "{err}"
-    );
-    assert!(err.to_string().contains("huge"), "{err}");
-
     let explicit = RepoEntry {
         stall_threshold: Some("1h".to_owned()),
-        ..huge
+        ..huge.clone()
     };
-    assert_eq!(
-        explicit
-            .settings()
-            .expect("explicit threshold")
-            .stall_threshold,
-        secs(3600)
-    );
+    for candidate in [huge, explicit] {
+        let err = candidate.settings().expect_err("interval exceeds one year");
+        assert!(
+            matches!(
+                err,
+                RegistryError::DurationOutOfRange {
+                    key: "interval",
+                    ..
+                }
+            ),
+            "{err}"
+        );
+        assert!(err.to_string().contains("huge"), "{err}");
+    }
+}
+
+#[test]
+fn durations_git_rsrs_rejects_are_refused() {
+    let year = "365days";
+    let over_a_year = "365days 1s";
+    for key in ["interval", "quiet_period", "git_timeout", "lock_timeout"] {
+        let with = |value: &str| {
+            let value = Some(value.to_owned());
+            let base = entry("bounds", Path::new("/x/bounds"));
+            match key {
+                "interval" => RepoEntry {
+                    interval: value,
+                    ..base
+                },
+                "quiet_period" => RepoEntry {
+                    quiet_period: value,
+                    ..base
+                },
+                "git_timeout" => RepoEntry {
+                    git_timeout: value,
+                    ..base
+                },
+                _ => RepoEntry {
+                    lock_timeout: value,
+                    ..base
+                },
+            }
+        };
+        for bad in ["0s", over_a_year] {
+            let err = with(bad).settings().expect_err("out of range");
+            assert!(
+                matches!(&err, RegistryError::DurationOutOfRange { key: k, .. } if *k == key),
+                "{key} = {bad}: {err}"
+            );
+            assert!(err.to_string().contains("bounds"), "{err}");
+        }
+        assert!(with(year).settings().is_ok(), "{key} = one year is allowed");
+    }
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("registry.toml");
+    let text = "version = 1\n\n[[repo]]\nid = \"obaidoc\"\npath = \"/x/obaidoc\"\n\
+                branch = \"main\"\nremote = \"origin\"\ninterval = \"0s\"\n";
+    fs::write(&path, text).expect("write");
+    let err = Registry::load(&path).expect_err("zero interval must fail on load");
+    assert!(err.to_string().contains("obaidoc"), "{err}");
 }
 
 #[test]
@@ -313,4 +360,38 @@ fn identity_is_the_canonical_path_at_registration() {
         registry.with_added(entry("b", &repo)),
         Err(RegistryError::DuplicatePath { .. })
     ));
+}
+
+#[test]
+fn editors_never_return_a_registry_load_would_reject() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("registry.toml");
+    let first = mkdir(tmp.path().join("first"));
+    let second = mkdir(tmp.path().join("second"));
+    Registry::update(&path, |r| r.with_added(entry("first", &first))).expect("seed");
+
+    for bad in ["0s", "soon"] {
+        let added = RepoEntry {
+            interval: Some(bad.to_owned()),
+            ..entry("second", &second)
+        };
+        let err = Registry::update(&path, |r| r.with_added(added)).expect_err("add refused");
+        assert!(err.to_string().contains("second"), "{bad}: {err}");
+
+        let err = Registry::update(&path, |r| {
+            r.with_entry(&id("first"), |e| RepoEntry {
+                interval: Some(bad.to_owned()),
+                ..e.clone()
+            })
+        })
+        .expect_err("edit refused");
+        assert!(err.to_string().contains("first"), "{bad}: {err}");
+
+        let saved = Registry::load(&path).expect("registry still loads");
+        assert_eq!(saved.repos.len(), 1);
+        assert_eq!(
+            saved.get(&id("first")).and_then(|e| e.interval.clone()),
+            None
+        );
+    }
 }

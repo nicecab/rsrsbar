@@ -17,6 +17,10 @@ const DEFAULT_QUIET_PERIOD: Duration = Duration::from_secs(30);
 const DEFAULT_GIT_TIMEOUT: Duration = Duration::from_secs(120);
 const DEFAULT_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const STALL_INTERVALS: u32 = 3;
+/// git-rsrs's accepted duration range (`src/config.rs`, `fn duration`, at the
+/// pinned rev 73ab676d): zero is rejected ("duration must be positive") and so
+/// is anything above `365 * 24 * 3600` s ("duration exceeds one year").
+const GIT_RSRS_MAX_DURATION: Duration = Duration::from_secs(365 * 24 * 3600);
 
 /// Errors from reading, writing and editing the registry.
 #[derive(Debug, thiserror::Error)]
@@ -39,11 +43,12 @@ pub enum RegistryError {
         value: String,
         source: humantime::DurationError,
     },
-    #[error(
-        "repository {id}: the default stall threshold ({STALL_INTERVALS} x interval {interval:?}) \
-         overflows; set stall_threshold explicitly"
-    )]
-    StallThresholdOverflow { id: RepoId, interval: Duration },
+    #[error("repository {id}: {key} {value:?} must be positive and at most one year")]
+    DurationOutOfRange {
+        id: RepoId,
+        key: &'static str,
+        value: String,
+    },
     #[error("cannot resolve {}: {source}", path.display())]
     UnresolvablePath { path: PathBuf, source: io::Error },
     #[error("repository {0} is already registered")]
@@ -101,18 +106,24 @@ pub struct Settings {
 
 impl RepoEntry {
     /// Parses the overrides and applies the defaults; the stall threshold
-    /// defaults to three times this repository's own interval.
+    /// defaults to three times this repository's own interval. The four
+    /// durations passed to git-rsrs must lie in its accepted range, so an
+    /// entry git-rsrs would refuse is refused here, at load, add and edit time.
     pub fn settings(&self) -> Result<Settings, RegistryError> {
-        let interval = self.duration("interval", &self.interval, DEFAULT_INTERVAL)?;
+        let interval = self.git_rsrs_duration("interval", &self.interval, DEFAULT_INTERVAL)?;
         Ok(Settings {
             interval,
-            quiet_period: self.duration(
+            quiet_period: self.git_rsrs_duration(
                 "quiet_period",
                 &self.quiet_period,
                 DEFAULT_QUIET_PERIOD,
             )?,
-            git_timeout: self.duration("git_timeout", &self.git_timeout, DEFAULT_GIT_TIMEOUT)?,
-            lock_timeout: self.duration(
+            git_timeout: self.git_rsrs_duration(
+                "git_timeout",
+                &self.git_timeout,
+                DEFAULT_GIT_TIMEOUT,
+            )?,
+            lock_timeout: self.git_rsrs_duration(
                 "lock_timeout",
                 &self.lock_timeout,
                 DEFAULT_LOCK_TIMEOUT,
@@ -122,18 +133,32 @@ impl RepoEntry {
         })
     }
 
-    /// The explicit override, else `STALL_INTERVALS` x `interval`; the
-    /// default is computed only when needed and never overflows silently.
+    /// The explicit override, else `STALL_INTERVALS` x `interval`. The
+    /// interval is at most one year, so the product cannot saturate; the
+    /// saturating multiplication only rules out a panic.
     fn stall_threshold(&self, interval: Duration) -> Result<Duration, RegistryError> {
-        if let Some(value) = &self.stall_threshold {
-            return self.parse_duration("stall_threshold", value);
+        match &self.stall_threshold {
+            Some(value) => self.parse_duration("stall_threshold", value),
+            None => Ok(interval.saturating_mul(STALL_INTERVALS)),
         }
-        interval
-            .checked_mul(STALL_INTERVALS)
-            .ok_or_else(|| RegistryError::StallThresholdOverflow {
+    }
+
+    /// A duration git-rsrs will accept: positive and at most one year.
+    fn git_rsrs_duration(
+        &self,
+        key: &'static str,
+        value: &Option<String>,
+        default: Duration,
+    ) -> Result<Duration, RegistryError> {
+        let parsed = self.duration(key, value, default)?;
+        if parsed.is_zero() || parsed > GIT_RSRS_MAX_DURATION {
+            return Err(RegistryError::DurationOutOfRange {
                 id: self.id.clone(),
-                interval,
-            })
+                key,
+                value: value.clone().unwrap_or_default(),
+            });
+        }
+        Ok(parsed)
     }
 
     fn duration(
@@ -169,7 +194,7 @@ impl Default for Registry {
 
 impl Registry {
     /// Reads the registry; a missing file is an empty registry. Fails on an
-    /// unknown version or on any entry whose settings do not parse.
+    /// unknown version or on any entry whose `settings()` are invalid.
     pub fn load(path: &Path) -> Result<Registry, RegistryError> {
         let text = match fs::read_to_string(path) {
             Ok(text) => text,
@@ -222,8 +247,11 @@ impl Registry {
     /// A new registry with `entry` appended. The path must resolve (`add`
     /// registers existing checkouts only) and is stored canonical: a path's
     /// identity is its canonical path when it is registered. A duplicate id
-    /// or an already registered path is refused.
+    /// or an already registered path is refused, and so is an entry whose
+    /// settings `load` would reject. If `self` would pass `load`, so does the
+    /// returned registry; `self` itself is not re-validated.
     pub fn with_added(&self, entry: RepoEntry) -> Result<Registry, RegistryError> {
+        entry.settings()?;
         let entry = RepoEntry {
             path: resolve(&entry.path)?,
             ..entry
@@ -236,7 +264,8 @@ impl Registry {
         })
     }
 
-    /// A new registry without `id`; unknown ids are an error.
+    /// A new registry without `id`; unknown ids are an error. If `self` would
+    /// pass `load`, so does the returned registry.
     pub fn without(&self, id: &RepoId) -> Result<Registry, RegistryError> {
         self.position(id)?;
         let repos = self.repos.iter().filter(|e| &e.id != id).cloned().collect();
@@ -249,7 +278,9 @@ impl Registry {
     /// A new registry with `id`'s entry replaced by `f(entry)`; the result
     /// must not collide with another entry's id or path. A changed path must
     /// resolve and is stored canonical; an unchanged one is kept as stored,
-    /// so a moved checkout can still be paused or edited.
+    /// so a moved checkout can still be paused or edited. An edit whose
+    /// settings `load` would reject is refused. If `self` would pass `load`,
+    /// so does the returned registry; `self` itself is not re-validated.
     pub fn with_entry(
         &self,
         id: &RepoId,
@@ -258,6 +289,7 @@ impl Registry {
         let index = self.position(id)?;
         let original = &self.repos[index];
         let edited = f(original);
+        edited.settings()?;
         let edited = if edited.path == original.path {
             edited
         } else {

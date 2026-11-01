@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 humantime = "2"
+plist = "1"
 serde = { version = "1", features = ["derive"] }
 sha2 = "0.11"
 tempfile = "3"
@@ -15,4 +16,5 @@ thiserror = "2"
 toml = "1"
 
 [dev-dependencies]
+git-rsrs = { git = "https://github.com/nicecab/git-rsrs", rev = "73ab676d50a835693c3d99fdfb01887f03750358" }
 serde_json = "1"
