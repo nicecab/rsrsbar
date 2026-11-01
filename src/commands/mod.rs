@@ -6,20 +6,25 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::atomic::write_atomic;
 use crate::episode::StateError;
 use crate::git::GitError;
 use crate::gitrsrs::GitRsrsError;
 use crate::launchd::{Launchd, LaunchdError};
 use crate::paths::{Paths, PathsError};
-use crate::registry::{RegistryError, RepoEntry};
-use crate::service::{ServiceError, git_rsrs_config, launch_agent_plist};
+use crate::registry::RegistryError;
+use crate::service::ServiceError;
 
 mod add;
+mod install;
+mod lifecycle;
 mod remove;
+mod sync;
 
 pub use add::{AddArgs, add};
+pub use install::{ServiceChange, install_service};
+pub use lifecycle::{pause, refresh, restart, resume};
 pub use remove::remove;
+pub use sync::sync;
 
 /// Everything a command may touch, passed in explicitly.
 pub struct Ctx<'a> {
@@ -70,37 +75,26 @@ pub enum CommandError {
     Io { path: PathBuf, source: io::Error },
 }
 
+/// Exit code for a command that ran past its deadline (as `timeout(1)`).
+const DEADLINE_EXIT: u8 = 124;
+const FAILURE_EXIT: u8 = 1;
+
+impl CommandError {
+    /// The process exit code for this error: 124 when `sync` ran past its
+    /// deadline, 1 otherwise (usage errors exit 2 from the argument parser).
+    pub fn exit_code(&self) -> u8 {
+        match self {
+            CommandError::GitRsrs(GitRsrsError::Deadline(_)) => DEADLINE_EXIT,
+            _ => FAILURE_EXIT,
+        }
+    }
+}
+
 pub(crate) fn io_error(path: &Path) -> impl FnOnce(io::Error) -> CommandError + '_ {
     move |source| CommandError::Io {
         path: path.to_path_buf(),
         source,
     }
-}
-
-/// Writes `entry`'s git-rsrs config and LaunchAgent plist (creating its
-/// repository and log directories) and returns whether either file changed.
-pub fn install_service(ctx: &Ctx, entry: &RepoEntry) -> Result<bool, CommandError> {
-    let settings = entry.settings()?;
-    let config = git_rsrs_config(entry, &settings, &ctx.paths, &ctx.rsrsbar_exe)?;
-    let plist = launch_agent_plist(entry, &ctx.paths, &ctx.git_rsrs)?;
-    let repo_dir = ctx.paths.repo_dir(&entry.id);
-    let log = ctx.paths.stdout_log(&entry.id);
-    let dirs = [Some(repo_dir.as_path()), log.parent()];
-    for dir in dirs.into_iter().flatten() {
-        fs::create_dir_all(dir).map_err(io_error(dir))?;
-    }
-    let config_changed =
-        write_if_changed(&ctx.paths.git_rsrs_config(&entry.id), config.as_bytes())?;
-    let plist_changed = write_if_changed(&ctx.paths.launch_agent(&entry.id), &plist)?;
-    Ok(config_changed || plist_changed)
-}
-
-fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<bool, CommandError> {
-    if fs::read(path).is_ok_and(|current| current == bytes) {
-        return Ok(false);
-    }
-    write_atomic(path, bytes).map_err(io_error(path))?;
-    Ok(true)
 }
 
 /// The service lock. Every command that changes a repository's service

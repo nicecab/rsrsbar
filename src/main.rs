@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 use rsrsbar::commands::{self, AddArgs, CommandError, Ctx, Report};
 use rsrsbar::{GIT_RSRS, Launchctl, Paths};
 
-/// Exit code for failures other than usage errors (clap exits 2 for those).
+/// Exit code for a report whose code does not fit a process exit status.
 const FAILURE: u8 = 1;
 
 #[derive(Parser)]
@@ -42,6 +42,16 @@ enum Command {
     },
     /// Stop a watcher and unregister the repository.
     Remove { id: String },
+    /// Stop a watcher until resume.
+    Pause { id: String },
+    /// Rewrite a paused repository's service files and start its watcher.
+    Resume { id: String },
+    /// Rewrite service files (all repositories, or one) and restart changed watchers.
+    Refresh { id: Option<String> },
+    /// Restart a watcher.
+    Restart { id: String },
+    /// Run one sync now and pass git-rsrs's exit code through (124 on deadline).
+    Sync { id: String },
 }
 
 fn main() -> ExitCode {
@@ -55,7 +65,7 @@ fn main() -> ExitCode {
         }
         Err(err) => {
             eprintln!("rsrsbar: {err}");
-            ExitCode::from(FAILURE)
+            ExitCode::from(err.exit_code())
         }
     }
 }
@@ -83,6 +93,11 @@ fn run(command: Command) -> Result<Report, CommandError> {
             },
         ),
         Command::Remove { id } => commands::remove(&ctx, &id),
+        Command::Pause { id } => commands::pause(&ctx, &id),
+        Command::Resume { id } => commands::resume(&ctx, &id),
+        Command::Refresh { id } => commands::refresh(&ctx, id.as_deref()),
+        Command::Restart { id } => commands::restart(&ctx, &id),
+        Command::Sync { id } => commands::sync(&ctx, &id),
     }
 }
 
