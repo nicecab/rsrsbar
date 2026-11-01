@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime};
 
 use super::{CommandError, Ctx, Report, hooks_text};
 use crate::episode::{RepoMemory, State};
-use crate::health::{Color, classify};
+use crate::health::{Color, Health, classify};
 use crate::observe::{ObserveError, observe};
 use crate::registry::{Registry, RepoEntry};
 use crate::status::{StatusFile, StatusRead};
@@ -15,7 +15,6 @@ const SECS_PER_MINUTE: u64 = 60;
 const SECS_PER_HOUR: u64 = 3600;
 const SECS_PER_DAY: u64 = 86_400;
 const RED_EXIT: i32 = 1;
-const UNOBSERVABLE: &str = "cannot observe repository";
 const NO_REPOSITORIES: &str = "no repositories registered; add one with rsrsbar add <PATH>";
 
 /// One block per repository in registry order, then the heartbeat,
@@ -102,10 +101,18 @@ fn block(
 fn unobservable(entry: &RepoEntry, err: &ObserveError) -> String {
     let fix = match err {
         ObserveError::PausedAt { .. } => Some(format!("  fix: run rsrsbar resume {}", entry.id)),
-        ObserveError::Settings(_) | ObserveError::Launchd(_) => None,
+        ObserveError::Settings(_) | ObserveError::Launchd(_) | ObserveError::Checkout { .. } => {
+            None
+        }
     };
+    let health = Health::unobservable();
+    let label = health.label.as_deref().unwrap_or_default();
     [
-        Some(format!("{}  RED  {UNOBSERVABLE}", entry.id)),
+        Some(format!(
+            "{}  {}  {label}",
+            entry.id,
+            color_name(health.color)
+        )),
         Some(format!("  error: {err}")),
         fix,
     ]

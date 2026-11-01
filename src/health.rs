@@ -38,7 +38,9 @@ pub struct Observation<'a> {
 }
 
 /// The spec's table rows in evaluation order (1, 2, 3, 4, 5, starting, 6,
-/// 7, 7a, 7b, 8, 9, 10, 11, 12, 13, 14, 15).
+/// 7, 7a, 7b, 8, 9, 10, 11, 12, 13, 14, 15), plus `Unobservable`, which
+/// `classify` never returns: it stands for a repository that could not be
+/// observed at all (see [`Health::unobservable`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Row {
@@ -60,6 +62,7 @@ pub enum Row {
     Stalled,
     Transient,
     Healthy,
+    Unobservable,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -91,6 +94,13 @@ pub struct Health {
 }
 
 impl Health {
+    /// A repository that could not be observed (checkout gone, settings or
+    /// launchd unreadable): red, notified at once, "cannot observe
+    /// repository".
+    pub fn unobservable() -> Health {
+        Health::new(Row::Unobservable, Some("cannot observe repository"))
+    }
+
     fn new(row: Row, label: Option<&str>) -> Health {
         Health::with_phase(row, label.map(str::to_owned), None)
     }
@@ -141,9 +151,11 @@ fn policy(row: Row) -> (Color, Notify) {
         Row::Paused | Row::Starting | Row::Offline | Row::OtherBranch => {
             (Color::Grey, Notify::Never)
         }
-        Row::HooksChanged | Row::ManualIntervention | Row::WatcherNotRunning | Row::SyncFailed => {
-            (Color::Red, Notify::Immediately)
-        }
+        Row::HooksChanged
+        | Row::ManualIntervention
+        | Row::WatcherNotRunning
+        | Row::SyncFailed
+        | Row::Unobservable => (Color::Red, Notify::Immediately),
         Row::FailureRun | Row::Intermittent | Row::OfflineLong | Row::Stalled => {
             (Color::Red, Notify::Yes)
         }

@@ -1,10 +1,12 @@
 //! The resident menu bar app. Everything that decides is plain library
-//! code; [`notify`] is the macOS-only bridge to `UNUserNotificationCenter`.
+//! code ([`poll`]); [`notify`] is the macOS-only bridge to
+//! `UNUserNotificationCenter`.
 
 use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "macos")]
 pub mod notify;
+pub mod poll;
 
 /// Whether the app may show notifications, as macOS reports it. `Unknown`
 /// when the answer did not arrive in time or the process has no bundle.

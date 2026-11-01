@@ -186,3 +186,38 @@ pub fn add_args(path: &Path) -> rsrsbar::commands::AddArgs {
         allow_hooks: false,
     }
 }
+
+/// A git-rsrs report of `outcome` from a periodic sync.
+pub fn sync_report(outcome: git_rsrs::outcome::Outcome) -> git_rsrs::outcome::SyncReport {
+    git_rsrs::outcome::SyncReport {
+        outcome,
+        ..git_rsrs::outcome::SyncReport::new(git_rsrs::outcome::Trigger::Periodic)
+    }
+}
+
+/// Writes the status file git-rsrs would after `attempts` (report, time).
+pub fn write_status(
+    fx: &Fixture,
+    repo_id: &rsrsbar::RepoId,
+    attempts: &[(git_rsrs::outcome::SyncReport, SystemTime)],
+) {
+    let status = attempts
+        .iter()
+        .fold(
+            None::<git_rsrs::status::Status>,
+            |previous, (report, at)| {
+                Some(git_rsrs::status::next(previous.as_ref(), report, *at, 42))
+            },
+        )
+        .expect("at least one attempt");
+    let json = serde_json::to_string(&status).expect("json");
+    fs::write(fx.paths.status_file(repo_id), json).expect("write status");
+}
+
+/// A `Recording` with each id's watcher loaded and running as this process.
+pub fn running(ids: &[&rsrsbar::RepoId]) -> rsrsbar::Recording {
+    ids.iter()
+        .fold(rsrsbar::Recording::new(), |launchd, repo_id| {
+            launchd.with_loaded(&rsrsbar::watch_label(repo_id), Some(std::process::id()))
+        })
+}

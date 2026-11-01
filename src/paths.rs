@@ -124,6 +124,11 @@ impl Paths {
         self.support_dir().join("heartbeat-state.json")
     }
 
+    /// Held (`flock`) by the running menu bar app: one instance only.
+    pub fn app_lock(&self) -> PathBuf {
+        self.support_dir().join("app.lock")
+    }
+
     /// The menu bar app's LaunchAgent plist.
     pub fn app_agent(&self) -> PathBuf {
         self.home
