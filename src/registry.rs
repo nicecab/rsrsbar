@@ -16,6 +16,10 @@ const DEFAULT_QUIET_PERIOD: Duration = Duration::from_secs(30);
 const DEFAULT_GIT_TIMEOUT: Duration = Duration::from_secs(120);
 const DEFAULT_LOCK_TIMEOUT: Duration = Duration::from_secs(30);
 const STALL_INTERVALS: u32 = 3;
+const DEFAULT_PAUSED_LIMIT: Duration = Duration::from_secs(24 * 3600);
+const DEFAULT_OFFLINE_LIMIT: Duration = Duration::from_secs(2 * 3600);
+const DEFAULT_OTHER_BRANCH_LIMIT: Duration = Duration::from_secs(24 * 3600);
+const DEFAULT_TERMINAL: &str = "Terminal";
 /// git-rsrs's accepted duration range (`src/config.rs`, `fn duration`, at the
 /// pinned rev 73ab676d): zero is rejected ("duration must be positive") and so
 /// is anything above `365 * 24 * 3600` s ("duration exceeds one year").
@@ -48,6 +52,12 @@ pub enum RegistryError {
         key: &'static str,
         value: String,
     },
+    #[error("repository {id}: {key} {value:?} must be a positive whole number of seconds")]
+    BadLimit {
+        id: RepoId,
+        key: &'static str,
+        value: String,
+    },
     #[error("cannot resolve {}: {source}", path.display())]
     UnresolvablePath { path: PathBuf, source: io::Error },
     #[error("repository {0} is already registered")]
@@ -62,8 +72,31 @@ pub enum RegistryError {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Registry {
     pub version: u32,
+    #[serde(default, skip_serializing_if = "AppSettings::is_default")]
+    pub app: AppSettings,
     #[serde(rename = "repo", default)]
     pub repos: Vec<RepoEntry>,
+}
+
+/// The optional `[app]` table: which applications the menu bar app opens a
+/// checkout with. App names, not commands: a LaunchAgent has no `$EDITOR`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor: Option<String>,
+}
+
+impl AppSettings {
+    /// The terminal application, `Terminal` unless set.
+    pub fn terminal_app(&self) -> &str {
+        self.terminal.as_deref().unwrap_or(DEFAULT_TERMINAL)
+    }
+
+    fn is_default(&self) -> bool {
+        self == &AppSettings::default()
+    }
 }
 
 /// One registered repository. Durations are humantime strings, times
@@ -87,6 +120,12 @@ pub struct RepoEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stall_threshold: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused_limit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offline_limit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub other_branch_limit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_hooks: Option<String>,
@@ -101,11 +140,19 @@ pub struct Settings {
     pub lock_timeout: Duration,
     pub lock_name: Option<String>,
     pub stall_threshold: Duration,
+    /// Paused longer than this turns yellow (row 1).
+    pub paused_limit: Duration,
+    /// Offline with no success for longer than this turns red (row 9).
+    pub offline_limit: Duration,
+    /// On another branch with no success for longer than this turns yellow
+    /// (row 11).
+    pub other_branch_limit: Duration,
 }
 
 impl RepoEntry {
     /// Parses the overrides and applies the defaults; the stall threshold
-    /// defaults to three times this repository's own interval. The four
+    /// defaults to three times this repository's own interval, the long
+    /// limits to 24 h (paused), 2 h (offline) and 24 h (other branch). The four
     /// durations passed to git-rsrs must lie in its accepted range, so an
     /// entry git-rsrs would refuse is refused here, at load, add and edit time.
     pub fn settings(&self) -> Result<Settings, RegistryError> {
@@ -135,6 +182,17 @@ impl RepoEntry {
                 &self.stall_threshold,
                 interval.saturating_mul(STALL_INTERVALS),
             )?,
+            paused_limit: self.limit("paused_limit", &self.paused_limit, DEFAULT_PAUSED_LIMIT)?,
+            offline_limit: self.limit(
+                "offline_limit",
+                &self.offline_limit,
+                DEFAULT_OFFLINE_LIMIT,
+            )?,
+            other_branch_limit: self.limit(
+                "other_branch_limit",
+                &self.other_branch_limit,
+                DEFAULT_OTHER_BRANCH_LIMIT,
+            )?,
         })
     }
 
@@ -148,6 +206,25 @@ impl RepoEntry {
         let parsed = self.duration(key, value, default)?;
         if parsed.is_zero() || parsed > GIT_RSRS_MAX_DURATION {
             return Err(RegistryError::DurationOutOfRange {
+                id: self.id.clone(),
+                key,
+                value: value.clone().unwrap_or_default(),
+            });
+        }
+        Ok(parsed)
+    }
+
+    /// A long limit: positive and a whole number of seconds, so the label
+    /// that names it ("offline for over 90 s") is exact.
+    fn limit(
+        &self,
+        key: &'static str,
+        value: &Option<String>,
+        default: Duration,
+    ) -> Result<Duration, RegistryError> {
+        let parsed = self.duration(key, value, default)?;
+        if parsed.is_zero() || parsed.subsec_nanos() != 0 {
+            return Err(RegistryError::BadLimit {
                 id: self.id.clone(),
                 key,
                 value: value.clone().unwrap_or_default(),
@@ -182,6 +259,7 @@ impl Default for Registry {
     fn default() -> Registry {
         Registry {
             version: VERSION,
+            app: AppSettings::default(),
             repos: Vec::new(),
         }
     }
@@ -248,6 +326,7 @@ impl Registry {
         let repos = self.repos.iter().cloned().chain([entry]).collect();
         Ok(Registry {
             version: self.version,
+            app: self.app.clone(),
             repos,
         })
     }
@@ -259,6 +338,7 @@ impl Registry {
         let repos = self.repos.iter().filter(|e| &e.id != id).cloned().collect();
         Ok(Registry {
             version: self.version,
+            app: self.app.clone(),
             repos,
         })
     }
@@ -297,6 +377,7 @@ impl Registry {
             .collect();
         Ok(Registry {
             version: self.version,
+            app: self.app.clone(),
             repos,
         })
     }

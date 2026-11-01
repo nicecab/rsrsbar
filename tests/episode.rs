@@ -24,6 +24,9 @@ fn settings() -> Settings {
         lock_timeout: Duration::from_secs(30),
         lock_name: None,
         stall_threshold: 30 * MIN,
+        paused_limit: 24 * 60 * MIN,
+        offline_limit: 2 * 60 * MIN,
+        other_branch_limit: 24 * 60 * MIN,
     }
 }
 

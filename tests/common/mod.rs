@@ -186,3 +186,61 @@ pub fn add_args(path: &Path) -> rsrsbar::commands::AddArgs {
         allow_hooks: false,
     }
 }
+
+/// A git-rsrs report of `outcome` from a periodic sync.
+pub fn sync_report(outcome: git_rsrs::outcome::Outcome) -> git_rsrs::outcome::SyncReport {
+    git_rsrs::outcome::SyncReport {
+        outcome,
+        ..git_rsrs::outcome::SyncReport::new(git_rsrs::outcome::Trigger::Periodic)
+    }
+}
+
+/// Writes the status file git-rsrs would after `attempts` (report, time).
+pub fn write_status(
+    fx: &Fixture,
+    repo_id: &rsrsbar::RepoId,
+    attempts: &[(git_rsrs::outcome::SyncReport, SystemTime)],
+) {
+    let status = attempts
+        .iter()
+        .fold(
+            None::<git_rsrs::status::Status>,
+            |previous, (report, at)| {
+                Some(git_rsrs::status::next(previous.as_ref(), report, *at, 42))
+            },
+        )
+        .expect("at least one attempt");
+    let json = serde_json::to_string(&status).expect("json");
+    fs::write(fx.paths.status_file(repo_id), json).expect("write status");
+}
+
+/// A `Recording` with each id's watcher loaded and running as this process.
+pub fn running(ids: &[&rsrsbar::RepoId]) -> rsrsbar::Recording {
+    ids.iter()
+        .fold(rsrsbar::Recording::new(), |launchd, repo_id| {
+            launchd.with_loaded(&rsrsbar::watch_label(repo_id), Some(std::process::id()))
+        })
+}
+
+/// Parses plist bytes into its top-level dictionary.
+pub fn plist_dict(bytes: &[u8]) -> plist::Dictionary {
+    plist::Value::from_reader(std::io::Cursor::new(bytes))
+        .expect("parse plist")
+        .into_dictionary()
+        .expect("dictionary")
+}
+
+/// The string at `key`; panics when it is missing or not a string.
+pub fn plist_string<'a>(dict: &'a plist::Dictionary, key: &str) -> &'a str {
+    dict.get(key)
+        .and_then(plist::Value::as_string)
+        .unwrap_or_else(|| panic!("{key} is a string"))
+}
+
+/// Registers a fresh checkout `<root>/<name>` (with an origin) through
+/// `add`, launchd recorded and discarded.
+pub fn add_repo(fx: &Fixture, name: &str) -> rsrsbar::RepoId {
+    let launchd = rsrsbar::Recording::new();
+    rsrsbar::commands::add(&fx.ctx(&launchd), add_args(&fx.repo(name, true))).expect("add");
+    id(name)
+}

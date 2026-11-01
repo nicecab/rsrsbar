@@ -1,6 +1,9 @@
 //! One registry entry turned into the inputs of the health table, so the
 //! CLI's `status` and the app classify identically.
 
+use std::fs;
+use std::io;
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use crate::episode::RepoMemory;
@@ -26,6 +29,8 @@ pub enum ObserveError {
     },
     #[error(transparent)]
     Launchd(#[from] LaunchdError),
+    #[error("cannot read the checkout {}: {source}", path.display())]
+    Checkout { path: PathBuf, source: io::Error },
 }
 
 /// What one look at a repository found; `observation` lends it to
@@ -62,7 +67,9 @@ impl RepoSnapshot {
     }
 }
 
-/// Looks at one registered repository: its settings and pause time, whether
+/// Looks at one registered repository: that its checkout is still a
+/// readable directory (a deleted checkout would otherwise look trusted and
+/// merely "not syncing"), its settings and pause time, whether
 /// `.autosync/` still matches the allowed digest (unreadable → untrusted),
 /// its launchd job (`Running` whenever a PID exists, uptime `ZERO` when the
 /// age cannot be read), its status file, and — only when the latest outcome
@@ -72,6 +79,10 @@ pub fn observe(
     paths: &Paths,
     launchd: &dyn Launchd,
 ) -> Result<RepoSnapshot, ObserveError> {
+    fs::read_dir(&entry.path).map_err(|source| ObserveError::Checkout {
+        path: entry.path.clone(),
+        source,
+    })?;
     let settings = entry.settings()?;
     let paused_at = paused_at(entry)?;
     let hooks_trusted = hooks_digest(&entry.path)

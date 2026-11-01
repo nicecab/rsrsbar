@@ -7,7 +7,9 @@ use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use crate::child::{DEADLINE, output_within, wait_until};
 
 use crate::registry::Settings;
 
@@ -22,7 +24,6 @@ const GIT_STEPS: u32 = 3;
 const HOOK_TIMEOUTS: Duration = Duration::from_secs(70);
 const MARGIN: Duration = Duration::from_secs(60);
 const KILL_GRACE: Duration = Duration::from_secs(2);
-const POLL: Duration = Duration::from_millis(50);
 /// Shell convention for a process ended by a signal.
 const SIGNAL_EXIT_BASE: i32 = 128;
 
@@ -69,9 +70,7 @@ pub fn parse_version(output: &str) -> Option<(u64, u64, u64)> {
 
 /// Refuses a git-rsrs older than [`MIN_GIT_RSRS`].
 pub fn check_version(git_rsrs: &Path) -> Result<(), GitRsrsError> {
-    let output = Command::new(git_rsrs)
-        .arg("--version")
-        .output()
+    let output = output_within(Command::new(git_rsrs).arg("--version"), DEADLINE)
         .map_err(io_error(git_rsrs))?;
     let text = String::from_utf8_lossy(&output.stdout);
     let found = parse_version(&text)
@@ -139,20 +138,6 @@ pub fn sync_once(
         exit_code: exit_code(status),
         output: read_all(&mut log).map_err(io_error(git_rsrs))?,
     })
-}
-
-/// Polls `child` until it exits or `deadline` passes (`Ok(None)`).
-fn wait_until(child: &mut Child, deadline: Duration) -> io::Result<Option<ExitStatus>> {
-    let started = Instant::now();
-    loop {
-        if let Some(status) = child.try_wait()? {
-            return Ok(Some(status));
-        }
-        if started.elapsed() >= deadline {
-            return Ok(None);
-        }
-        thread::sleep(POLL);
-    }
 }
 
 /// SIGTERM to the group, SIGKILL after the grace, then reap the leader.

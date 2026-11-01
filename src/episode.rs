@@ -228,6 +228,30 @@ impl State {
         Ok(updated)
     }
 
+    /// [`State::update`] for the app: under the same single hold of the
+    /// lock, a corrupt state (unparsable or an unknown version) is renamed
+    /// to `<path>.corrupt` and `f` starts from empty. Returns the saved
+    /// state and, when that happened, the warning to show. Deciding
+    /// "corrupt", setting it aside and writing the replacement all happen
+    /// while the lock is held, so a concurrent writer is never renamed away.
+    pub fn update_or_reset(
+        path: &Path,
+        f: impl FnOnce(&State) -> State,
+    ) -> Result<(State, Option<String>), StateError> {
+        let lock = lock_sibling(path).map_err(|(failed, source)| io_error(&failed, source))?;
+        let (current, warning) = match State::load(path) {
+            Ok(state) => (state, None),
+            Err(err @ (StateError::Parse { .. } | StateError::UnsupportedVersion(_))) => {
+                (State::default(), Some(set_aside(path, &err)?))
+            }
+            Err(err) => return Err(err),
+        };
+        let updated = f(&current);
+        updated.save(path)?;
+        drop(lock);
+        Ok((updated, warning))
+    }
+
     /// A copy with `id`'s memory replaced.
     pub fn with_repo(&self, id: &RepoId, memory: RepoMemory) -> State {
         let repos = self
@@ -242,6 +266,40 @@ impl State {
             repos,
         }
     }
+}
+
+/// The most set-aside copies kept side by side (`.corrupt` … `.corrupt-N`).
+const MAX_ASIDE: u32 = 1000;
+
+/// Moves the corrupt state at `path` to the first of `<path>.corrupt`,
+/// `<path>.corrupt-2`, … that does not exist yet, never replacing an
+/// earlier copy: a hard link fails instead of overwriting, then the
+/// original is removed. The warning names the reason and the destination.
+fn set_aside(path: &Path, err: &StateError) -> Result<String, StateError> {
+    for n in 1..=MAX_ASIDE {
+        let mut aside = path.as_os_str().to_owned();
+        aside.push(if n == 1 {
+            ".corrupt".to_owned()
+        } else {
+            format!(".corrupt-{n}")
+        });
+        let aside = PathBuf::from(aside);
+        match std::fs::hard_link(path, &aside) {
+            Ok(()) => {
+                std::fs::remove_file(path).map_err(|source| io_error(path, source))?;
+                return Ok(format!(
+                    "{err}; moved it to {} and started from empty",
+                    aside.display()
+                ));
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(source) => return Err(io_error(&aside, source)),
+        }
+    }
+    Err(io_error(
+        path,
+        io::Error::other(format!("{MAX_ASIDE} set-aside copies already exist")),
+    ))
 }
 
 fn io_error(path: &Path, source: io::Error) -> StateError {

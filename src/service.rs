@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::paths::{Paths, watch_label};
+use crate::paths::{APP_LABEL, HEARTBEAT_LABEL, Paths, watch_label};
 use crate::registry::{RepoEntry, Settings};
 use crate::trust::Phase;
 
@@ -20,6 +20,10 @@ const PRE_COMMIT_TIMEOUT: Duration = Duration::from_secs(30);
 const POST_INTEGRATE_TIMEOUT: Duration = Duration::from_secs(30);
 const ON_RESULT_TIMEOUT: Duration = Duration::from_secs(10);
 const PRE_COMMIT_REJECT: i32 = 3;
+/// How often launchd runs `check-heartbeat`.
+const HEARTBEAT_INTERVAL_SECS: i64 = 900;
+/// The executable inside the app bundle.
+const BUNDLE_EXE: &str = "Contents/MacOS/rsrsbar";
 
 /// Errors from generating service files.
 #[derive(Debug, thiserror::Error)]
@@ -74,6 +78,33 @@ struct LaunchAgent {
     run_at_load: bool,
     keep_alive: bool,
     throttle_interval: i64,
+    standard_out_path: String,
+    standard_error_path: String,
+}
+
+/// The menu bar app: always kept alive, an interactive process.
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct AppAgent {
+    label: &'static str,
+    program_arguments: [String; 2],
+    environment_variables: Environment,
+    run_at_load: bool,
+    keep_alive: bool,
+    process_type: &'static str,
+    standard_out_path: String,
+    standard_error_path: String,
+}
+
+/// `check-heartbeat`: every 15 min, not at load.
+#[derive(Serialize)]
+#[serde(rename_all = "PascalCase")]
+struct HeartbeatAgent {
+    label: &'static str,
+    program_arguments: [String; 2],
+    environment_variables: Environment,
+    run_at_load: bool,
+    start_interval: i64,
     standard_out_path: String,
     standard_error_path: String,
 }
@@ -143,17 +174,61 @@ pub fn launch_agent_plist(
             "watch".to_owned(),
         ],
         working_directory: repo,
-        environment_variables: Environment {
-            path: format!("{BASE_PATH}:{}", utf8(&paths.mise_shims())?),
-        },
+        environment_variables: environment(paths)?,
         run_at_load: true,
         keep_alive: true,
         throttle_interval: THROTTLE_INTERVAL_SECS,
         standard_out_path: utf8(&paths.stdout_log(&entry.id))?.to_owned(),
         standard_error_path: utf8(&paths.stderr_log(&entry.id))?.to_owned(),
     };
+    xml(&agent)
+}
+
+/// The app's LaunchAgent: `<bundle>/Contents/MacOS/rsrsbar app`, unconditional
+/// `KeepAlive`, `RunAtLoad`, `ProcessType = Interactive`. It gets the
+/// watchers' `PATH`, so a Sync now runs hooks with the same tools as the
+/// watcher would.
+pub fn app_plist(bundle: &Path, paths: &Paths) -> Result<Vec<u8>, ServiceError> {
+    let agent = AppAgent {
+        label: APP_LABEL,
+        program_arguments: [utf8(&bundle.join(BUNDLE_EXE))?.to_owned(), "app".to_owned()],
+        environment_variables: environment(paths)?,
+        run_at_load: true,
+        keep_alive: true,
+        process_type: "Interactive",
+        standard_out_path: utf8(&paths.job_log(APP_LABEL))?.to_owned(),
+        standard_error_path: utf8(&paths.job_error_log(APP_LABEL))?.to_owned(),
+    };
+    xml(&agent)
+}
+
+/// The heartbeat job's LaunchAgent: `<bundle>/Contents/MacOS/rsrsbar
+/// check-heartbeat` every 900 s, not at load.
+pub fn heartbeat_plist(bundle: &Path, paths: &Paths) -> Result<Vec<u8>, ServiceError> {
+    let agent = HeartbeatAgent {
+        label: HEARTBEAT_LABEL,
+        program_arguments: [
+            utf8(&bundle.join(BUNDLE_EXE))?.to_owned(),
+            "check-heartbeat".to_owned(),
+        ],
+        environment_variables: environment(paths)?,
+        run_at_load: false,
+        start_interval: HEARTBEAT_INTERVAL_SECS,
+        standard_out_path: utf8(&paths.job_log(HEARTBEAT_LABEL))?.to_owned(),
+        standard_error_path: utf8(&paths.job_error_log(HEARTBEAT_LABEL))?.to_owned(),
+    };
+    xml(&agent)
+}
+
+fn environment(paths: &Paths) -> Result<Environment, ServiceError> {
+    Ok(Environment {
+        path: format!("{BASE_PATH}:{}", utf8(&paths.mise_shims())?),
+    })
+}
+
+fn xml(agent: &impl Serialize) -> Result<Vec<u8>, ServiceError> {
     let mut bytes = Vec::new();
-    plist::to_writer_xml(&mut bytes, &agent)?;
+    plist::to_writer_xml(&mut bytes, agent)?;
     Ok(bytes)
 }
 

@@ -4,7 +4,7 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 use std::time::Duration;
 
-use rsrsbar::{Registry, RegistryError, RepoEntry, RepoId};
+use rsrsbar::{AppSettings, Registry, RegistryError, RepoEntry, RepoId};
 
 fn id(s: &str) -> RepoId {
     RepoId::new(s).expect("valid id")
@@ -22,6 +22,9 @@ fn entry(name: &str, path: &Path) -> RepoEntry {
         git_timeout: None,
         lock_timeout: None,
         stall_threshold: None,
+        paused_limit: None,
+        offline_limit: None,
+        other_branch_limit: None,
         paused_at: None,
         allowed_hooks: None,
     }
@@ -394,4 +397,62 @@ fn editors_never_return_a_registry_load_would_reject() {
             None
         );
     }
+}
+
+#[test]
+fn app_settings_round_trip() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = tmp.path().join("registry.toml");
+    let repo = entry("obaidoc", &mkdir(tmp.path().join("obaidoc")));
+    let plain = Registry::default().with_added(repo).expect("added");
+    assert_eq!(plain.app, AppSettings::default());
+    assert_eq!(plain.app.terminal_app(), "Terminal");
+
+    plain.save(&path).expect("save");
+    let text = fs::read_to_string(&path).expect("read");
+    assert!(
+        !text.contains("[app]"),
+        "no [app] table by default:\n{text}"
+    );
+    assert_eq!(Registry::load(&path).expect("load"), plain);
+
+    let zed = Registry {
+        app: AppSettings {
+            editor: Some("Zed".to_owned()),
+            ..AppSettings::default()
+        },
+        ..plain.clone()
+    };
+    zed.save(&path).expect("save");
+    let text = fs::read_to_string(&path).expect("read");
+    assert!(
+        text.contains("[app]") && text.contains("editor = \"Zed\""),
+        "{text}"
+    );
+    assert!(
+        !text.contains("terminal"),
+        "unset terminal is omitted:\n{text}"
+    );
+    let loaded = Registry::load(&path).expect("load");
+    assert_eq!(loaded, zed);
+    assert_eq!(loaded.app.terminal_app(), "Terminal");
+
+    let iterm = AppSettings {
+        terminal: Some("iTerm".to_owned()),
+        ..AppSettings::default()
+    };
+    assert_eq!(iterm.terminal_app(), "iTerm");
+
+    // Every editor keeps the app settings.
+    let edited = loaded
+        .with_entry(&id("obaidoc"), |e| RepoEntry {
+            paused_at: Some("2026-11-01T10:00:00Z".to_owned()),
+            ..e.clone()
+        })
+        .expect("edited");
+    assert_eq!(edited.app, zed.app);
+    assert_eq!(
+        edited.without(&id("obaidoc")).expect("removed").app,
+        zed.app
+    );
 }

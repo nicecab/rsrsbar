@@ -17,16 +17,20 @@ use crate::trust::present_hooks;
 
 mod add;
 mod allow;
+mod app_service;
+mod heartbeat;
 mod install;
 mod lifecycle;
 mod preview;
 mod remove;
 mod run_hook;
-mod status;
+pub(crate) mod status;
 mod sync;
 
 pub use add::{AddArgs, add};
 pub use allow::allow;
+pub use app_service::{start, stop};
+pub use heartbeat::check_heartbeat;
 pub use install::{ServiceChange, install_service};
 pub use lifecycle::{pause, refresh, restart, resume};
 pub use preview::{Preview, allow_preview};

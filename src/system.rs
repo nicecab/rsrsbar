@@ -3,6 +3,8 @@
 
 use std::io;
 use std::process::Command;
+
+use crate::child::{DEADLINE, output_within};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const SYSCTL: &str = "/usr/sbin/sysctl";
@@ -33,7 +35,7 @@ pub fn awake_since() -> io::Result<SystemTime> {
 }
 
 fn kern_time(name: &str) -> io::Result<SystemTime> {
-    let output = Command::new(SYSCTL).args(["-n", name]).output()?;
+    let output = output_within(Command::new(SYSCTL).args(["-n", name]), DEADLINE)?;
     if !output.status.success() {
         return Err(io::Error::other(format!("sysctl {name} failed")));
     }
@@ -44,6 +46,32 @@ fn kern_time(name: &str) -> io::Result<SystemTime> {
             format!("unexpected sysctl {name} output: {}", text.trim()),
         )
     })
+}
+
+/// Whether a Focus mode is on, from the contents of
+/// `~/Library/DoNotDisturb/DB/Assertions.json`: `Some(true)` when any
+/// `data[]` record holds a non-empty `storeAssertionRecords`; `Some(false)`
+/// when every record has a shape seen with nothing active (an empty
+/// `storeAssertionRecords`, or only `storeInvalidation*` keys — macOS omits
+/// the assertions key then); `None` for anything else. The format is
+/// undocumented, so an unrecognised shape is "unknown", never "off".
+pub fn parse_focus(json: &str) -> Option<bool> {
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    let records = value.get("data")?.as_array()?;
+    records.iter().try_fold(false, |active, record| {
+        Some(active || record_active(record.as_object()?)?)
+    })
+}
+
+/// One `data[]` record: `Some(active)` for a recognised shape.
+fn record_active(record: &serde_json::Map<String, serde_json::Value>) -> Option<bool> {
+    match record.get("storeAssertionRecords") {
+        Some(list) => Some(!list.as_array()?.is_empty()),
+        None => record
+            .keys()
+            .any(|key| key.starts_with("storeInvalidation"))
+            .then_some(false),
+    }
 }
 
 /// Parses `ps -o etime=` output, `[[dd-]hh:]mm:ss`.
@@ -78,9 +106,10 @@ fn number(text: &str) -> Option<u64> {
 /// How long `pid` has been running; `Ok(None)` when there is no such
 /// process.
 pub fn process_age(pid: u32) -> io::Result<Option<Duration>> {
-    let output = Command::new(PS)
-        .args(["-o", "etime=", "-p", &pid.to_string()])
-        .output()?;
+    let output = output_within(
+        Command::new(PS).args(["-o", "etime=", "-p", &pid.to_string()]),
+        DEADLINE,
+    )?;
     let text = String::from_utf8_lossy(&output.stdout);
     if !output.status.success() || text.trim().is_empty() {
         return Ok(None);

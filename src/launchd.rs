@@ -1,6 +1,7 @@
 //! launchd behind a small trait: `Launchctl` drives `/bin/launchctl` in the
 //! user's `gui/<uid>` domain, `Recording` is a test double.
 
+use crate::child::{DEADLINE, output_within};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -97,7 +98,7 @@ impl Launchctl {
     }
 
     fn run(&self, args: &[&OsStr]) -> Result<Output, LaunchdError> {
-        Ok(Command::new(LAUNCHCTL).args(args).output()?)
+        Ok(output_within(Command::new(LAUNCHCTL).args(args), DEADLINE)?)
     }
 }
 
@@ -188,6 +189,7 @@ struct RecordingState {
     calls: Vec<String>,
     loaded: BTreeMap<String, Option<u32>>,
     fail_next_bootstrap: bool,
+    fail_next_kickstart: bool,
     spawned: u32,
 }
 
@@ -221,6 +223,11 @@ impl Recording {
     /// Makes the next `bootstrap` fail without loading anything.
     pub fn fail_next_bootstrap(&self) {
         self.state.borrow_mut().fail_next_bootstrap = true;
+    }
+
+    /// Makes the next `kickstart` fail without restarting anything.
+    pub fn fail_next_kickstart(&self) {
+        self.state.borrow_mut().fail_next_kickstart = true;
     }
 
     /// Every call so far, oldest first.
@@ -263,6 +270,14 @@ impl Launchd for Recording {
     fn kickstart(&self, label: &str) -> Result<(), LaunchdError> {
         let mut state = self.state.borrow_mut();
         state.calls.push(format!("kickstart {label}"));
+        if std::mem::take(&mut state.fail_next_kickstart) {
+            return Err(refused(
+                "kickstart",
+                label.to_owned(),
+                BOOTSTRAP_FAILED,
+                "Input/output error",
+            ));
+        }
         if !state.loaded.contains_key(label) {
             return Err(refused(
                 "kickstart",

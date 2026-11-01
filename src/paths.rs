@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 
 const MAX_ID_LEN: usize = 63;
 const LABEL_PREFIX: &str = "com.nicecab.rsrsbar.watch.";
+/// The launchd label of the menu bar app's job.
+pub const APP_LABEL: &str = crate::bundle::BUNDLE_ID;
+/// The launchd label of the independent `check-heartbeat` job.
+pub const HEARTBEAT_LABEL: &str = "com.nicecab.rsrsbar.heartbeat";
 
 /// Errors from building repository ids.
 #[derive(Debug, thiserror::Error)]
@@ -110,6 +114,52 @@ impl Paths {
 
     pub fn state(&self) -> PathBuf {
         self.support_dir().join("state.json")
+    }
+
+    /// The app's liveness file, written every poll.
+    pub fn heartbeat(&self) -> PathBuf {
+        self.support_dir().join("heartbeat.json")
+    }
+
+    /// `check-heartbeat`'s own state.
+    pub fn heartbeat_state(&self) -> PathBuf {
+        self.support_dir().join("heartbeat-state.json")
+    }
+
+    /// Held (`flock`) by the running menu bar app: one instance only.
+    pub fn app_lock(&self) -> PathBuf {
+        self.support_dir().join("app.lock")
+    }
+
+    /// The menu bar app's LaunchAgent plist.
+    pub fn app_agent(&self) -> PathBuf {
+        self.agent(APP_LABEL)
+    }
+
+    /// The heartbeat job's LaunchAgent plist.
+    pub fn heartbeat_agent(&self) -> PathBuf {
+        self.agent(HEARTBEAT_LABEL)
+    }
+
+    /// `<home>/Library/Logs/<label>.log`, a job's standard output.
+    pub fn job_log(&self, label: &str) -> PathBuf {
+        self.logs_dir().join(format!("{label}.log"))
+    }
+
+    /// `<home>/Library/Logs/<label>.error.log`, a job's standard error.
+    pub fn job_error_log(&self, label: &str) -> PathBuf {
+        self.logs_dir().join(format!("{label}.error.log"))
+    }
+
+    /// Focus / Do Not Disturb assertions (an undocumented macOS file).
+    pub fn focus_assertions(&self) -> PathBuf {
+        self.home.join("Library/DoNotDisturb/DB/Assertions.json")
+    }
+
+    fn agent(&self, label: &str) -> PathBuf {
+        self.home
+            .join("Library/LaunchAgents")
+            .join(format!("{label}.plist"))
     }
 
     pub fn repo_dir(&self, id: &RepoId) -> PathBuf {

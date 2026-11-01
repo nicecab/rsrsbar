@@ -20,13 +20,24 @@ struct Cli {
     command: Command,
 }
 
-/// `run-hook` needs nothing but `$HOME`; every other command runs with a
-/// full [`Ctx`].
+/// `run-hook` needs nothing but `$HOME` and the bundle helpers need nothing
+/// at all; every other command runs with a full [`Ctx`].
 #[derive(Subcommand)]
 enum Command {
     /// Run one allowed hook phase; called by the generated git-rsrs config.
     #[command(hide = true)]
     RunHook { id: String, phase: String },
+    /// Print the app bundle's Info.plist; used by scripts/bundle.sh.
+    #[command(hide = true)]
+    InfoPlist,
+    /// Request notification permission and post TEXT; a bundle smoke test.
+    #[cfg(target_os = "macos")]
+    #[command(hide = true)]
+    NotifyTest { text: String },
+    /// Run the menu bar app; started by its LaunchAgent.
+    #[cfg(target_os = "macos")]
+    #[command(hide = true)]
+    App,
     #[command(flatten)]
     Managed(Managed),
 }
@@ -76,11 +87,23 @@ enum Managed {
     },
     /// Show every repository's health; exits 1 if any is red.
     Status,
+    /// Load the menu bar app and its heartbeat job (run from rsrsbar.app).
+    Start,
+    /// Unload the heartbeat job, then the menu bar app; watchers keep syncing.
+    Stop,
+    /// Restart a stuck menu bar app, or alert; run by the heartbeat job.
+    #[command(hide = true)]
+    CheckHeartbeat,
 }
 
 fn main() -> ExitCode {
     let command = match Cli::parse().command {
         Command::RunHook { id, phase } => return run_hook(&id, &phase),
+        Command::InfoPlist => return info_plist(),
+        #[cfg(target_os = "macos")]
+        Command::NotifyTest { text } => return notify_test(&text),
+        #[cfg(target_os = "macos")]
+        Command::App => return app(),
         Command::Managed(command) => command,
     };
     match run(command) {
@@ -109,6 +132,38 @@ fn run_hook(id: &str, phase: &str) -> ExitCode {
             eprintln!("{}", one_line(&message));
             ExitCode::from(FAILURE)
         }
+    }
+}
+
+fn info_plist() -> ExitCode {
+    let plist = rsrsbar::info_plist(env!("CARGO_PKG_VERSION"));
+    match io::stdout().lock().write_all(&plist) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("rsrsbar: {err}");
+            ExitCode::from(FAILURE)
+        }
+    }
+}
+
+/// Prints `authorization: <state>`, then `posted` or `post failed: <why>`;
+/// exits 0 only when authorized and posted.
+#[cfg(target_os = "macos")]
+fn notify_test(text: &str) -> ExitCode {
+    use rsrsbar::Authorization;
+    use rsrsbar::app::notify;
+
+    let authorization = notify::request_authorization();
+    println!("authorization: {}", authorization.as_str());
+    let posted = notify::post("notify-test", "rsrsbar · notify-test", text);
+    match &posted {
+        Ok(()) => println!("posted"),
+        Err(err) => println!("post failed: {err}"),
+    }
+    if authorization == Authorization::Authorized && posted.is_ok() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(FAILURE)
     }
 }
 
@@ -148,14 +203,25 @@ fn run(command: Managed) -> Result<Report, CommandError> {
         Managed::Restart { id } => commands::restart(&ctx, &id),
         Managed::Sync { id } => commands::sync(&ctx, &id),
         Managed::Allow { id, yes } => allow(&ctx, &id, yes),
-        Managed::Status => {
-            let awake = rsrsbar::awake_since().map_err(|source| CommandError::Io {
-                path: PathBuf::from("/usr/sbin/sysctl"),
-                source,
-            })?;
-            commands::status(&ctx, awake)
+        Managed::Status => commands::status(&ctx, awake_since()?),
+        Managed::Start => commands::start(&ctx),
+        Managed::Stop => commands::stop(&ctx),
+        Managed::CheckHeartbeat => {
+            // A wake time that cannot be read must not stop the last line of
+            // defence from deciding; it judges without wake grace.
+            let awake = awake_since()
+                .inspect_err(|err| eprintln!("rsrsbar: {}", one_line(&err.to_string())))
+                .ok();
+            commands::check_heartbeat(&ctx, awake)
         }
     }
+}
+
+fn awake_since() -> Result<SystemTime, CommandError> {
+    rsrsbar::awake_since().map_err(|source| CommandError::Io {
+        path: PathBuf::from("/usr/sbin/sysctl"),
+        source,
+    })
 }
 
 /// Prints the preview, then asks on a terminal unless `--yes`; without a
@@ -203,18 +269,35 @@ fn home() -> Result<PathBuf, CommandError> {
         .ok_or_else(|| CommandError::Refused("HOME is not set".to_owned()))
 }
 
-fn context(launchd: &Launchctl) -> Result<Ctx<'_>, CommandError> {
-    let home = home()?;
+/// The running binary, canonicalized (what generated configs call back).
+fn current_exe() -> Result<PathBuf, CommandError> {
     let exe = std::env::current_exe().and_then(|exe| exe.canonicalize());
-    let rsrsbar_exe = exe.map_err(|source| CommandError::Io {
+    exe.map_err(|source| CommandError::Io {
         path: PathBuf::from("current executable"),
         source,
-    })?;
+    })
+}
+
+fn context(launchd: &Launchctl) -> Result<Ctx<'_>, CommandError> {
     Ok(Ctx {
-        paths: Paths::new(home),
+        paths: Paths::new(home()?),
         launchd,
         git_rsrs: PathBuf::from(GIT_RSRS),
-        rsrsbar_exe,
+        rsrsbar_exe: current_exe()?,
         now: SystemTime::now(),
     })
+}
+
+/// `rsrsbar app`: never returns unless it cannot start.
+#[cfg(target_os = "macos")]
+fn app() -> ExitCode {
+    match home().and_then(|home| Ok((home, current_exe()?))) {
+        Ok((home, exe)) => {
+            rsrsbar::app::shell::run_app(Paths::new(home), PathBuf::from(GIT_RSRS), exe)
+        }
+        Err(err) => {
+            eprintln!("rsrsbar: {}", one_line(&err.to_string()));
+            ExitCode::from(err.exit_code())
+        }
+    }
 }
