@@ -48,6 +48,32 @@ fn kern_time(name: &str) -> io::Result<SystemTime> {
     })
 }
 
+/// Whether a Focus mode is on, from the contents of
+/// `~/Library/DoNotDisturb/DB/Assertions.json`: `Some(true)` when any
+/// `data[]` record holds a non-empty `storeAssertionRecords`; `Some(false)`
+/// when every record has a shape seen with nothing active (an empty
+/// `storeAssertionRecords`, or only `storeInvalidation*` keys — macOS omits
+/// the assertions key then); `None` for anything else. The format is
+/// undocumented, so an unrecognised shape is "unknown", never "off".
+pub fn parse_focus(json: &str) -> Option<bool> {
+    let value: serde_json::Value = serde_json::from_str(json).ok()?;
+    let records = value.get("data")?.as_array()?;
+    records.iter().try_fold(false, |active, record| {
+        Some(active || record_active(record.as_object()?)?)
+    })
+}
+
+/// One `data[]` record: `Some(active)` for a recognised shape.
+fn record_active(record: &serde_json::Map<String, serde_json::Value>) -> Option<bool> {
+    match record.get("storeAssertionRecords") {
+        Some(list) => Some(!list.as_array()?.is_empty()),
+        None => record
+            .keys()
+            .any(|key| key.starts_with("storeInvalidation"))
+            .then_some(false),
+    }
+}
+
 /// Parses `ps -o etime=` output, `[[dd-]hh:]mm:ss`.
 pub fn parse_etime(output: &str) -> Option<Duration> {
     let text = output.trim();

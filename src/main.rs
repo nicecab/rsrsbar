@@ -87,6 +87,10 @@ enum Managed {
     },
     /// Show every repository's health; exits 1 if any is red.
     Status,
+    /// Load the menu bar app and its heartbeat job (run from rsrsbar.app).
+    Start,
+    /// Unload the heartbeat job, then the menu bar app; watchers keep syncing.
+    Stop,
     /// Restart a stuck menu bar app, or alert; run by the heartbeat job.
     #[command(hide = true)]
     CheckHeartbeat,
@@ -200,6 +204,8 @@ fn run(command: Managed) -> Result<Report, CommandError> {
         Managed::Sync { id } => commands::sync(&ctx, &id),
         Managed::Allow { id, yes } => allow(&ctx, &id, yes),
         Managed::Status => commands::status(&ctx, awake_since()?),
+        Managed::Start => commands::start(&ctx),
+        Managed::Stop => commands::stop(&ctx),
         Managed::CheckHeartbeat => {
             // A wake time that cannot be read must not stop the last line of
             // defence from deciding; it judges without wake grace.

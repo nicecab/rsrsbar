@@ -17,6 +17,7 @@ use crate::trust::present_hooks;
 
 mod add;
 mod allow;
+mod app_service;
 mod heartbeat;
 mod install;
 mod lifecycle;
@@ -28,6 +29,7 @@ mod sync;
 
 pub use add::{AddArgs, add};
 pub use allow::allow;
+pub use app_service::{start, stop};
 pub use heartbeat::check_heartbeat;
 pub use install::{ServiceChange, install_service};
 pub use lifecycle::{pause, refresh, restart, resume};

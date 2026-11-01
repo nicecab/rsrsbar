@@ -215,3 +215,89 @@ fn status_with_no_repositories() {
         report.text
     );
 }
+
+#[test]
+fn status_reads_heartbeat() {
+    use rsrsbar::Authorization;
+    use rsrsbar::heartbeat::Heartbeat;
+
+    let fx = Fixture::new();
+    let launchd = Recording::new();
+    let beat = |at: SystemTime, notifications| Heartbeat {
+        at,
+        pid: 4242,
+        notifications,
+    };
+    let lines = |fx: &Fixture| run_status(fx, &launchd).text;
+
+    beat(now() - MIN / 2, Authorization::Authorized)
+        .save(&fx.paths.heartbeat())
+        .expect("save heartbeat");
+    assert!(
+        lines(&fx).contains("notifications: authorized"),
+        "{}",
+        lines(&fx)
+    );
+
+    beat(now() - MIN / 2, Authorization::NotDetermined)
+        .save(&fx.paths.heartbeat())
+        .expect("save heartbeat");
+    assert!(
+        lines(&fx).contains("notifications: not determined"),
+        "{}",
+        lines(&fx)
+    );
+
+    beat(now() - 5 * MIN, Authorization::Authorized)
+        .save(&fx.paths.heartbeat())
+        .expect("save heartbeat");
+    let text = lines(&fx);
+    assert!(
+        text.contains("notifications: unknown (no heartbeat for 5 min)"),
+        "{text}"
+    );
+
+    // Focus comes from the home's DoNotDisturb assertions.
+    assert!(text.contains("focus: unknown"), "{text}");
+    let assertions = fx
+        .paths
+        .home
+        .join("Library/DoNotDisturb/DB/Assertions.json");
+    fs::create_dir_all(assertions.parent().expect("parent")).expect("mkdir");
+    fs::write(&assertions, include_str!("fixtures/focus_on.json")).expect("write");
+    assert!(lines(&fx).contains("focus: on"), "{}", lines(&fx));
+    fs::write(
+        &assertions,
+        include_str!("fixtures/focus_off_no_records.json"),
+    )
+    .expect("write");
+    assert!(lines(&fx).contains("focus: off"), "{}", lines(&fx));
+}
+
+#[test]
+fn parse_focus() {
+    assert_eq!(
+        rsrsbar::parse_focus(include_str!("fixtures/focus_on.json")),
+        Some(true)
+    );
+    assert_eq!(
+        rsrsbar::parse_focus(include_str!("fixtures/focus_off.json")),
+        Some(false)
+    );
+    assert_eq!(
+        rsrsbar::parse_focus(include_str!("fixtures/focus_off_no_records.json")),
+        Some(false)
+    );
+    assert_eq!(
+        rsrsbar::parse_focus(include_str!("fixtures/focus_garbage.json")),
+        None
+    );
+    // A record with neither assertions nor invalidations is not a shape
+    // macOS was seen to write: unknown, not off.
+    assert_eq!(
+        rsrsbar::parse_focus(include_str!("fixtures/focus_unknown_record.json")),
+        None
+    );
+    assert_eq!(rsrsbar::parse_focus(r#"{"data": "not a list"}"#), None);
+    assert_eq!(rsrsbar::parse_focus(r#"{"header": {}}"#), None);
+}

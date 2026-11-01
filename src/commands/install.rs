@@ -21,7 +21,7 @@ pub struct ServiceChange {
 
 /// A file an install replaced, with what it held before (`None`: it did
 /// not exist).
-struct Rewritten {
+pub(crate) struct Rewritten {
     path: PathBuf,
     previous: Option<Vec<u8>>,
 }
@@ -40,7 +40,7 @@ impl Install {
     }
 }
 
-fn restore(rewritten: &[Rewritten]) -> Result<(), CommandError> {
+pub(crate) fn restore(rewritten: &[Rewritten]) -> Result<(), CommandError> {
     for file in rewritten {
         match &file.previous {
             Some(bytes) => write_atomic(&file.path, bytes).map_err(io_error(&file.path))?,
@@ -93,7 +93,10 @@ pub(crate) fn install(ctx: &Ctx, entry: &RepoEntry) -> Result<Install, CommandEr
 }
 
 /// Writes `bytes` unless the file already holds them; `None` when it did.
-fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<Option<Rewritten>, CommandError> {
+pub(crate) fn write_if_changed(
+    path: &Path,
+    bytes: &[u8],
+) -> Result<Option<Rewritten>, CommandError> {
     let previous = match fs::read(path) {
         Ok(bytes) => Some(bytes),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
