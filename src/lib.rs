@@ -11,7 +11,7 @@ mod status;
 mod trust;
 
 pub use atomic::write_atomic;
-pub use episode::{EpisodeKey, RecoveryPoint, RepoMemory};
+pub use episode::{EpisodeKey, Notice, RecoveryPoint, RepoMemory, State, StateError, advance};
 pub use health::{
     Color, Health, JobState, Notify, Observation, Row, classify, failure_run, unhealthy_in_window,
 };
