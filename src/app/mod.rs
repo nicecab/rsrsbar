@@ -1,9 +1,11 @@
 //! The resident menu bar app. Everything that decides is plain library
-//! code ([`poll`]); [`notify`] is the macOS-only bridge to
-//! `UNUserNotificationCenter`.
+//! code ([`poll`], [`menu`], [`actions`]); [`notify`] is the macOS-only
+//! bridge to `UNUserNotificationCenter`.
 
 use serde::{Deserialize, Serialize};
 
+pub mod actions;
+pub mod menu;
 #[cfg(target_os = "macos")]
 pub mod notify;
 pub mod poll;
