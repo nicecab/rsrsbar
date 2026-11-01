@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::atomic::{read_optional, write_atomic};
+use crate::atomic::{lock_sibling, read_optional, write_atomic};
 use crate::health::{Color, Health, Notify, RELEASE_SUCCESSES, Row};
 use crate::paths::RepoId;
 use crate::status::StatusFile;
@@ -213,6 +213,19 @@ impl State {
     pub fn save(&self, path: &Path) -> Result<(), StateError> {
         let bytes = serde_json::to_vec_pretty(self)?;
         write_atomic(path, &bytes).map_err(|source| io_error(path, source))
+    }
+
+    /// Locked read-modify-write, shared by the CLI and the app: holds an
+    /// exclusive lock on the sibling `<path>.lock` (never replaced, unlike
+    /// the state itself) across load, `f` and save, like `Registry::update`.
+    /// A missing state starts empty; a corrupt one is an error, never
+    /// overwritten. The lock is released when the file is dropped.
+    pub fn update(path: &Path, f: impl FnOnce(&State) -> State) -> Result<State, StateError> {
+        let lock = lock_sibling(path).map_err(|(failed, source)| io_error(&failed, source))?;
+        let updated = f(&State::load(path)?);
+        updated.save(path)?;
+        drop(lock);
+        Ok(updated)
     }
 
     /// A copy with `id`'s memory replaced.

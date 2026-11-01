@@ -124,6 +124,12 @@ impl Paths {
         self.repo_dir(id).join("status.json")
     }
 
+    /// The snapshot of `.autosync/` taken by the last allow, which
+    /// `run-hook` executes.
+    pub fn allowed_hooks_dir(&self, id: &RepoId) -> PathBuf {
+        self.repo_dir(id).join("allowed-hooks")
+    }
+
     pub fn launch_agent(&self, id: &RepoId) -> PathBuf {
         self.home
             .join("Library/LaunchAgents")

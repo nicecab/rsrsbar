@@ -3,7 +3,7 @@ use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use rsrsbar::{Phase, hooks_digest, present_hooks};
+use rsrsbar::{Phase, hooks_digest, present_hooks, snapshot_hooks};
 
 const HOOK: &[u8] = b"#!/bin/sh\nexit 0\n";
 
@@ -194,4 +194,127 @@ fn present_hooks_lists_executables() {
             ("on-result", "on_result"),
         ]
     );
+}
+
+fn mode(path: &Path) -> u32 {
+    fs::symlink_metadata(path)
+        .expect("metadata")
+        .permissions()
+        .mode()
+        & 0o7777
+}
+
+#[test]
+fn snapshot_round_trips_digest() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = base_repo(tmp.path(), "repo");
+    write(&repo.join(".autosync/notes"), b"read me\n", 0o644);
+    write(&repo.join(".autosync/lib/x.sh"), HOOK, 0o700);
+    symlink("pre-commit", repo.join(".autosync/on-result")).expect("symlink");
+    let dest = tmp.path().join("support/repos/demo/allowed-hooks");
+
+    let copied = snapshot_hooks(&repo, &dest).expect("snapshot");
+    assert_eq!(copied, digest(&repo));
+    assert_eq!(fs::read(dest.join("pre-commit")).expect("read"), HOOK);
+    assert_eq!(mode(&dest.join("pre-commit")), 0o755);
+    assert_eq!(mode(&dest.join("notes")), 0o644);
+    assert_eq!(mode(&dest.join("lib/x.sh")), 0o700);
+    let link = fs::symlink_metadata(dest.join("on-result")).expect("metadata");
+    assert!(link.file_type().is_symlink());
+    assert_eq!(
+        fs::read_link(dest.join("on-result")).expect("link"),
+        PathBuf::from("pre-commit")
+    );
+
+    fs::remove_dir_all(repo.join(".autosync/lib")).expect("remove lib");
+    let again = snapshot_hooks(&repo, &dest).expect("second snapshot");
+    assert_eq!(again, digest(&repo));
+    assert!(
+        !dest.join("lib").exists(),
+        "the old copy is replaced, not merged"
+    );
+    let leftovers: Vec<_> = fs::read_dir(dest.parent().expect("parent"))
+        .expect("read parent")
+        .map(|e| e.expect("entry").file_name())
+        .collect();
+    assert_eq!(leftovers, vec![std::ffi::OsString::from("allowed-hooks")]);
+
+    let empty = tmp.path().join("empty");
+    fs::create_dir_all(&empty).expect("mkdir");
+    assert_eq!(
+        snapshot_hooks(&empty, &dest).expect("no hooks"),
+        digest(&empty)
+    );
+    assert_eq!(fs::read_dir(&dest).expect("dest").count(), 0);
+}
+
+#[test]
+fn snapshot_refuses_a_non_directory_autosync() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = tmp.path().join("repo");
+    let real = base_repo(tmp.path(), "real");
+    fs::create_dir_all(&repo).expect("mkdir");
+    symlink(real.join(".autosync"), repo.join(".autosync")).expect("symlink");
+    let dest = tmp.path().join("allowed-hooks");
+    assert!(snapshot_hooks(&repo, &dest).is_err());
+    assert!(!dest.exists());
+}
+
+/// Each case adds symlinks (path under `.autosync/`, target) to a fresh
+/// repository; the refusal must name one of them.
+type LinkCase = (&'static str, &'static [(&'static str, &'static str)]);
+
+#[test]
+fn snapshot_refuses_links_leaving_the_tree() {
+    let refused: [LinkCase; 4] = [
+        ("absolute target", &[("on-result", "/tmp/hook")]),
+        ("../ escape", &[("on-result", "../outside.sh")]),
+        (
+            "chain through a link that escapes",
+            &[("lib/esc", "../../outside.sh"), ("on-result", "lib/esc")],
+        ),
+        (
+            "escape only visible by following a directory link",
+            &[("lib/up", ".."), ("on-result", "lib/up/../outside.sh")],
+        ),
+    ];
+    for (name, links) in refused {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = base_repo(tmp.path(), "repo");
+        write(&repo.join("outside.sh"), HOOK, 0o755);
+        fs::create_dir_all(repo.join(".autosync/lib")).expect("mkdir lib");
+        for (link, target) in links {
+            symlink(target, repo.join(".autosync").join(link)).expect("symlink");
+        }
+        let dest = tmp.path().join("allowed-hooks");
+        let err = snapshot_hooks(&repo, &dest).expect_err(name);
+        assert_eq!(
+            err.kind(),
+            std::io::ErrorKind::InvalidInput,
+            "{name}: {err}"
+        );
+        let message = err.to_string();
+        assert!(
+            links.iter().any(|(link, _)| message.contains(link)),
+            "{name}: {message}"
+        );
+        assert!(!dest.exists(), "{name}: nothing is snapshotted");
+    }
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let repo = base_repo(tmp.path(), "repo");
+    write(&repo.join(".autosync/lib/x.sh"), HOOK, 0o755);
+    for (link, target) in [
+        ("on-result", "pre-commit"),
+        ("lib/up", ".."),
+        ("lib/hook", "../pre-commit"),
+        ("post-integrate", "lib/up/lib/x.sh"),
+        ("lib/dangling", "missing"),
+    ] {
+        symlink(target, repo.join(".autosync").join(link)).expect("symlink");
+    }
+    let dest = tmp.path().join("allowed-hooks");
+    let copied = snapshot_hooks(&repo, &dest).expect("internal links are allowed");
+    assert_eq!(copied, digest(&repo));
+    assert_eq!(fs::read(dest.join("post-integrate")).expect("read"), HOOK);
 }
