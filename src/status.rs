@@ -1,7 +1,6 @@
 //! Lenient, forward-compatible reader of git-rsrs status files.
 
-use std::fs;
-use std::io;
+use crate::atomic::read_optional;
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -139,9 +138,9 @@ impl StatusFile {
 /// than 1 is `Unreadable`. The version is checked first, so a file from an
 /// incompatible future format reports its version, not a field error.
 pub fn read_status(path: &Path) -> StatusRead {
-    let text = match fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return StatusRead::Missing,
+    let text = match read_optional(path) {
+        Ok(Some(text)) => text,
+        Ok(None) => return StatusRead::Missing,
         Err(e) => return StatusRead::Unreadable(e.to_string()),
     };
     match parse(&text) {

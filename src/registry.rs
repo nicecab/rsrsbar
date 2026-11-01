@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::atomic::write_atomic;
+use crate::atomic::{read_optional, write_atomic};
 use crate::paths::RepoId;
 
 const VERSION: u32 = 1;
@@ -129,18 +129,14 @@ impl RepoEntry {
                 DEFAULT_LOCK_TIMEOUT,
             )?,
             lock_name: self.lock_name.clone(),
-            stall_threshold: self.stall_threshold(interval)?,
+            // The interval is at most one year, so the default cannot
+            // saturate; the saturating multiplication only rules out a panic.
+            stall_threshold: self.duration(
+                "stall_threshold",
+                &self.stall_threshold,
+                interval.saturating_mul(STALL_INTERVALS),
+            )?,
         })
-    }
-
-    /// The explicit override, else `STALL_INTERVALS` x `interval`. The
-    /// interval is at most one year, so the product cannot saturate; the
-    /// saturating multiplication only rules out a panic.
-    fn stall_threshold(&self, interval: Duration) -> Result<Duration, RegistryError> {
-        match &self.stall_threshold {
-            Some(value) => self.parse_duration("stall_threshold", value),
-            None => Ok(interval.saturating_mul(STALL_INTERVALS)),
-        }
     }
 
     /// A duration git-rsrs will accept: positive and at most one year.
@@ -196,10 +192,8 @@ impl Registry {
     /// Reads the registry; a missing file is an empty registry. Fails on an
     /// unknown version or on any entry whose `settings()` are invalid.
     pub fn load(path: &Path) -> Result<Registry, RegistryError> {
-        let text = match fs::read_to_string(path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Registry::default()),
-            Err(source) => return Err(io_error(path, source)),
+        let Some(text) = read_optional(path).map_err(|source| io_error(path, source))? else {
+            return Ok(Registry::default());
         };
         let registry: Registry = toml::from_str(&text).map_err(|source| RegistryError::Parse {
             path: path.to_path_buf(),
@@ -298,19 +292,14 @@ impl Registry {
                 ..edited
             }
         };
-        let others: Vec<RepoEntry> = self.without(id)?.repos;
-        check_unique(&others, &edited)?;
-        let repos = self
-            .repos
+        let others = self.repos.iter().filter(|e| &e.id != id);
+        check_unique(others, &edited)?;
+        let (before, after) = self.repos.split_at(index);
+        let repos = before
             .iter()
-            .enumerate()
-            .map(|(i, e)| {
-                if i == index {
-                    edited.clone()
-                } else {
-                    e.clone()
-                }
-            })
+            .cloned()
+            .chain([edited])
+            .chain(after.iter().skip(1).cloned())
             .collect();
         Ok(Registry {
             version: self.version,
@@ -328,7 +317,10 @@ impl Registry {
 
 /// Fails unless `entry` differs from every `existing` entry by id and by
 /// stored (canonical) path.
-fn check_unique(existing: &[RepoEntry], entry: &RepoEntry) -> Result<(), RegistryError> {
+fn check_unique<'a>(
+    existing: impl IntoIterator<Item = &'a RepoEntry>,
+    entry: &RepoEntry,
+) -> Result<(), RegistryError> {
     for other in existing {
         if other.id == entry.id {
             return Err(RegistryError::DuplicateId(entry.id.clone()));

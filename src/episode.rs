@@ -2,19 +2,17 @@
 //! episode and the recovery point, persisted in `state.json`.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::atomic::write_atomic;
-use crate::health::{Color, Health, Notify, Row};
+use crate::atomic::{read_optional, write_atomic};
+use crate::health::{Color, Health, Notify, RELEASE_SUCCESSES, Row};
 use crate::paths::RepoId;
 use crate::status::StatusFile;
 
 const STATE_VERSION: u32 = 1;
-const RECOVERY_SUCCESSES: u32 = 2;
 
 /// The `attempt_seq` after which failures count, tied to the counters it
 /// belongs to.
@@ -68,22 +66,15 @@ impl RepoMemory {
 
     /// Whether the previous poll was red by row 6, 7, 7a or 7b.
     pub fn was_failure_red(&self) -> bool {
-        matches!(
-            self.last_row,
-            Some(Row::SyncFailed | Row::FailureRun | Row::Intermittent | Row::StaysRed)
-        )
+        self.last_row.is_some_and(Row::is_failure_red)
     }
 }
 
 impl EpisodeKey {
     /// The episode a health belongs to; rows 7, 7a and 7b count as one row.
     pub fn of(health: &Health) -> EpisodeKey {
-        let group = match health.row {
-            Row::FailureRun | Row::Intermittent | Row::StaysRed => Row::FailureRun,
-            other => other,
-        };
         EpisodeKey {
-            group,
+            group: health.row.episode_group(),
             phase: health.phase.clone(),
         }
     }
@@ -116,11 +107,12 @@ pub fn advance(
     status: Option<&StatusFile>,
 ) -> (RepoMemory, Option<Notice>) {
     let recovered = recovers(memory, health, status);
-    let episode_over = recovered.is_some() || health.color == Color::Green;
+    let is_recovery = recovered.is_some();
+    let episode_over = is_recovery || health.color == Color::Green;
     let alerted = memory.alerted.clone().filter(|_| !episode_over);
     let key = EpisodeKey::of(health);
     let alert = health.notify != Notify::Never && alerted.as_ref() != Some(&key);
-    let (label, phase) = if is_failure_row(health.row) {
+    let (label, phase) = if health.row.has_failure_label() {
         (health.label.clone(), health.phase.clone())
     } else if episode_over {
         (None, None)
@@ -133,7 +125,7 @@ pub fn advance(
         label,
         phase,
         alerted: if alert { Some(key) } else { alerted },
-        recovery: recovered.clone().or_else(|| memory.recovery.clone()),
+        recovery: recovered.or_else(|| memory.recovery.clone()),
     };
     let notice = if alert {
         Some(Notice::Alert {
@@ -143,7 +135,7 @@ pub fn advance(
                 .unwrap_or_else(|| "needs attention".to_owned()),
         })
     } else {
-        recovered.map(|_| Notice::Recovered)
+        is_recovery.then_some(Notice::Recovered)
     };
     (next, notice)
 }
@@ -156,7 +148,7 @@ fn recovers(
 ) -> Option<RecoveryPoint> {
     let left_red = memory.last_color == Some(Color::Red) && health.color != Color::Red;
     status
-        .filter(|s| left_red && s.consecutive_successes >= RECOVERY_SUCCESSES)
+        .filter(|s| left_red && s.consecutive_successes >= RELEASE_SUCCESSES)
         .map(recovery_point)
 }
 
@@ -165,13 +157,6 @@ fn recovery_point(status: &StatusFile) -> RecoveryPoint {
         counters_since: status.counters_since.clone(),
         seq: status.attempt_seq,
     }
-}
-
-fn is_failure_row(row: Row) -> bool {
-    matches!(
-        row,
-        Row::SyncFailed | Row::FailureRun | Row::Intermittent | Row::SingleFailure
-    )
 }
 
 /// Errors from reading and writing `state.json`.
@@ -211,13 +196,8 @@ impl State {
     /// Reads the state; a missing file is an empty state. A corrupt file or
     /// an unknown version is an error (the caller decides how to recover).
     pub fn load(path: &Path) -> Result<State, StateError> {
-        let text = match fs::read_to_string(path) {
-            Ok(text) => text,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(State::default()),
-            Err(source) => {
-                let path = path.to_path_buf();
-                return Err(StateError::Io { path, source });
-            }
+        let Some(text) = read_optional(path).map_err(|source| io_error(path, source))? else {
+            return Ok(State::default());
         };
         let state: State = serde_json::from_str(&text).map_err(|source| StateError::Parse {
             path: path.to_path_buf(),
@@ -232,19 +212,28 @@ impl State {
     /// Writes the state atomically.
     pub fn save(&self, path: &Path) -> Result<(), StateError> {
         let bytes = serde_json::to_vec_pretty(self)?;
-        write_atomic(path, &bytes).map_err(|source| StateError::Io {
-            path: path.to_path_buf(),
-            source,
-        })
+        write_atomic(path, &bytes).map_err(|source| io_error(path, source))
     }
 
     /// A copy with `id`'s memory replaced.
     pub fn with_repo(&self, id: &RepoId, memory: RepoMemory) -> State {
-        let mut repos = self.repos.clone();
-        repos.insert(id.clone(), memory);
+        let repos = self
+            .repos
+            .iter()
+            .filter(|(key, _)| *key != id)
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .chain([(id.clone(), memory)])
+            .collect();
         State {
             version: self.version,
             repos,
         }
+    }
+}
+
+fn io_error(path: &Path, source: io::Error) -> StateError {
+    StateError::Io {
+        path: path.to_path_buf(),
+        source,
     }
 }

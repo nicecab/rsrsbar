@@ -1,4 +1,5 @@
-//! Crash-safe file replacement.
+//! File I/O shared by the state files: crash-safe replacement and reading
+//! a file that may not exist yet.
 
 use std::fs;
 use std::io::{self, Write};
@@ -21,4 +22,14 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     tmp.as_file().sync_all()?;
     tmp.persist(path).map_err(|e| e.error)?;
     Ok(())
+}
+
+/// The file's contents, or `None` when it does not exist; any other I/O
+/// error is returned.
+pub(crate) fn read_optional(path: &Path) -> io::Result<Option<String>> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
 }

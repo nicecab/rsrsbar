@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use git_rsrs::config::Config;
 use plist::Value;
-use rsrsbar::{GIT_RSRS, Paths, RepoEntry, RepoId, git_rsrs_config, launch_agent_plist};
+use rsrsbar::{GIT_RSRS, Paths, Phase, RepoEntry, RepoId, git_rsrs_config, launch_agent_plist};
 
 const EXE: &str = "/Applications/rsrsbar.app/Contents/MacOS/rsrsbar";
 
@@ -250,5 +250,15 @@ fn registry_duration_bounds_match_git_rsrs() {
             Config::parse(&text).is_err(),
             "git-rsrs rejects {beyond:?}, so the registry must too"
         );
+    }
+}
+
+#[test]
+fn hook_tables_use_phase_config_keys() {
+    let paths = Paths::new(PathBuf::from("/Users/t"));
+    let text = config_text(&entry("keys", "/x/keys", "main", None), &paths);
+    for phase in Phase::ALL {
+        let table = format!("[[hooks.{}]]", phase.config_key());
+        assert_eq!(text.matches(&table).count(), 1, "{table} in:\n{text}");
     }
 }

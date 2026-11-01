@@ -13,7 +13,9 @@ const OFFLINE_LONG: Duration = Duration::from_secs(2 * 3600);
 const OTHER_BRANCH_LONG: Duration = Duration::from_secs(24 * 3600);
 const FAILURE_RUN_MIN: u32 = 2;
 const INTERMITTENT_MIN: u32 = 3;
-const RELEASE_SUCCESSES: u32 = 2;
+/// Consecutive successes that end a red episode: `classify` cuts the failure
+/// window and `advance` records the recovery point on the same poll.
+pub(crate) const RELEASE_SUCCESSES: u32 = 2;
 
 /// The launchd job state of a repository's watcher.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,6 +108,33 @@ impl Health {
     }
 }
 
+impl Row {
+    /// Rows 6, 7, 7a and 7b: the red that row 7b holds on to.
+    pub(crate) fn is_failure_red(self) -> bool {
+        matches!(
+            self,
+            Row::SyncFailed | Row::FailureRun | Row::Intermittent | Row::StaysRed
+        )
+    }
+
+    /// Rows 6, 7, 7a and 8, whose label and phase describe a fresh failure
+    /// (7b only repeats the remembered ones).
+    pub(crate) fn has_failure_label(self) -> bool {
+        matches!(
+            self,
+            Row::SyncFailed | Row::FailureRun | Row::Intermittent | Row::SingleFailure
+        )
+    }
+
+    /// The row an episode is keyed by: rows 7, 7a and 7b count as one row.
+    pub(crate) fn episode_group(self) -> Row {
+        match self {
+            Row::FailureRun | Row::Intermittent | Row::StaysRed => Row::FailureRun,
+            other => other,
+        }
+    }
+}
+
 /// The color and notification policy of each row, per the spec's table.
 fn policy(row: Row) -> (Color, Notify) {
     match row {
@@ -134,7 +163,8 @@ pub fn classify(obs: &Observation) -> Health {
     if !obs.hooks_trusted {
         return Health::new(Row::HooksChanged, Some("hook changed — needs allow"));
     }
-    if latest_outcome(obs) == Some(Outcome::ManualIntervention) {
+    if matches!(obs.status, StatusRead::Present(s) if s.last_outcome == Outcome::ManualIntervention)
+    {
         return Health::new(Row::ManualIntervention, Some("manual intervention needed"));
     }
     if watcher_not_running(obs) {
@@ -188,11 +218,10 @@ fn failure_rows(obs: &Observation, status: &StatusFile) -> Option<Health> {
         return Some(Health::with_phase(Row::Intermittent, Some(label), phase));
     }
     if obs.memory.was_failure_red() && status.consecutive_successes < RELEASE_SUCCESSES {
-        let memory = obs.memory;
         return Some(Health::with_phase(
             Row::StaysRed,
-            memory.label.clone(),
-            memory.phase.clone(),
+            obs.memory.label.clone(),
+            obs.memory.phase.clone(),
         ));
     }
     if run == 1 {
@@ -292,13 +321,6 @@ fn watcher_not_running(obs: &Observation) -> bool {
         (JobState::Running { up_for }, _) => {
             up_for > obs.settings.stall_threshold && !in_grace(obs)
         }
-    }
-}
-
-fn latest_outcome(obs: &Observation) -> Option<Outcome> {
-    match obs.status {
-        StatusRead::Present(status) => Some(status.last_outcome),
-        StatusRead::Missing | StatusRead::Unreadable(_) => None,
     }
 }
 

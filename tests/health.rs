@@ -48,7 +48,7 @@ fn status() -> StatusFile {
 }
 
 fn with_outcome(outcome: Outcome) -> StatusRead {
-    StatusRead::Present(StatusFile {
+    present(StatusFile {
         last_outcome: outcome,
         ..status()
     })
@@ -320,7 +320,7 @@ fn clock_skew_does_not_panic() {
 fn recent(pattern: &str, newest: u64) -> Vec<RecentAttempt> {
     pattern
         .chars()
-        .zip((0..newest).rev().map(|i| i + 1))
+        .zip((1..=newest).rev())
         .map(|(c, seq)| RecentAttempt {
             seq,
             healthy: c == 'H',
@@ -351,7 +351,7 @@ fn status_with(pattern: &str, outcome: Outcome) -> StatusFile {
 
 /// The fixture status with `outcome`, last success `ago` before `now`.
 fn succeeded_ago(outcome: Outcome, ago: Duration) -> StatusRead {
-    StatusRead::Present(StatusFile {
+    present(StatusFile {
         last_outcome: outcome,
         last_success_at: Some(now() - ago),
         ..status()

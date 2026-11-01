@@ -2,9 +2,9 @@
 
 use std::fs::{self, Metadata};
 use std::io;
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
@@ -134,8 +134,7 @@ fn entry(path: &Path, relative: &Path, meta: &Metadata) -> io::Result<Entry> {
 }
 
 fn link_target(path: &Path) -> io::Result<Vec<u8>> {
-    let target: PathBuf = fs::read_link(path)?;
-    Ok(target.as_os_str().as_bytes().to_vec())
+    Ok(fs::read_link(path)?.into_os_string().into_vec())
 }
 
 fn sorted(entries: Vec<Entry>) -> Vec<Entry> {

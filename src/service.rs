@@ -93,18 +93,18 @@ pub fn git_rsrs_config(
     rsrsbar_exe: &Path,
 ) -> Result<String, ServiceError> {
     let exe = utf8(rsrsbar_exe)?;
-    let hook = |phase: Phase| Hook {
-        command: [
-            exe.to_owned(),
-            "run-hook".to_owned(),
-            entry.id.to_string(),
-            phase.file_name().to_owned(),
-        ],
-        timeout: duration(hook_timeout(phase)),
-        reject_exit_codes: match phase {
-            Phase::PreCommit => vec![PRE_COMMIT_REJECT],
-            Phase::PostIntegrate | Phase::OnResult => Vec::new(),
-        },
+    let hook = |phase: Phase| {
+        let (timeout, reject_exit_codes) = hook_policy(phase);
+        Hook {
+            command: [
+                exe.to_owned(),
+                "run-hook".to_owned(),
+                entry.id.to_string(),
+                phase.file_name().to_owned(),
+            ],
+            timeout: duration(timeout),
+            reject_exit_codes,
+        }
     };
     let config = GitRsrsConfig {
         version: CONFIG_VERSION,
@@ -157,11 +157,13 @@ pub fn launch_agent_plist(
     Ok(bytes)
 }
 
-fn hook_timeout(phase: Phase) -> Duration {
+/// Each phase's timeout and rejection exit codes (Global Constraints:
+/// `reject_exit_codes = [3]` on `pre_commit` only).
+fn hook_policy(phase: Phase) -> (Duration, Vec<i32>) {
     match phase {
-        Phase::PreCommit => PRE_COMMIT_TIMEOUT,
-        Phase::PostIntegrate => POST_INTEGRATE_TIMEOUT,
-        Phase::OnResult => ON_RESULT_TIMEOUT,
+        Phase::PreCommit => (PRE_COMMIT_TIMEOUT, vec![PRE_COMMIT_REJECT]),
+        Phase::PostIntegrate => (POST_INTEGRATE_TIMEOUT, Vec::new()),
+        Phase::OnResult => (ON_RESULT_TIMEOUT, Vec::new()),
     }
 }
 
