@@ -1,5 +1,6 @@
+mod common;
+
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
@@ -10,12 +11,9 @@ use rsrsbar::{
     sync_once,
 };
 
-/// Writes an executable `/bin/sh` script named `name` into `dir`.
+/// An executable `/bin/sh` script named `name` in `dir`.
 fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
-    let path = dir.join(name);
-    fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write script");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
-    path
+    common::script(&dir.join(name), body)
 }
 
 fn version_text((major, minor, patch): (u64, u64, u64)) -> String {
@@ -29,6 +27,16 @@ fn version_parse_and_floor() {
     assert_eq!(parse_version("git-rsrs 0.1"), None);
     assert_eq!(parse_version("something 0.1.1"), None);
     assert_eq!(parse_version(""), None);
+    assert_eq!(
+        parse_version("git-rsrs 0.1.1-rc1"),
+        None,
+        "prereleases are not parsed"
+    );
+    assert_eq!(
+        parse_version("git-rsrs 0.18446744073709551616.0"),
+        None,
+        "a component beyond u64 is rejected"
+    );
     assert!(MIN_GIT_RSRS > (0, 1, 1));
 
     let tmp = tempfile::tempdir().expect("tempdir");

@@ -12,7 +12,8 @@ use tempfile::TempDir;
 
 const AUTOSYNC_DIR: &str = ".autosync";
 const DOMAIN: &[u8] = b"rsrsbar .autosync digest v1";
-const EXEC_BITS: u32 = 0o111;
+/// The mode bits that make a file executable, for the digest and for hooks.
+pub(crate) const EXEC_BITS: u32 = 0o111;
 const MODE_BITS: u32 = 0o7777;
 const STAGING_PREFIX: &str = ".allowed-hooks-";
 /// Link hops followed while resolving one symlink (macOS `MAXSYMLINKS`).
@@ -99,11 +100,14 @@ pub fn present_hooks(repo: &Path) -> Vec<Phase> {
     }
     Phase::ALL
         .into_iter()
-        .filter(|phase| {
-            fs::metadata(root.join(phase.file_name()))
-                .is_ok_and(|m| m.is_file() && m.permissions().mode() & EXEC_BITS != 0)
-        })
+        .filter(|phase| is_executable_file(&root.join(phase.file_name())))
         .collect()
+}
+
+/// Whether `path`, following symlinks, is a file with an executable bit:
+/// what git, and `run-hook`, treat as a hook.
+pub(crate) fn is_executable_file(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & EXEC_BITS != 0)
 }
 
 /// Replaces `dest` with a copy of `<repo>/.autosync/` — files with their

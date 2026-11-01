@@ -20,8 +20,19 @@ struct Cli {
     command: Command,
 }
 
+/// `run-hook` needs nothing but `$HOME`; every other command runs with a
+/// full [`Ctx`].
 #[derive(Subcommand)]
 enum Command {
+    /// Run one allowed hook phase; called by the generated git-rsrs config.
+    #[command(hide = true)]
+    RunHook { id: String, phase: String },
+    #[command(flatten)]
+    Managed(Managed),
+}
+
+#[derive(Subcommand)]
+enum Managed {
     /// Register a checkout and start its watcher.
     Add {
         path: PathBuf,
@@ -65,17 +76,14 @@ enum Command {
     },
     /// Show every repository's health; exits 1 if any is red.
     Status,
-    /// Run one allowed hook phase; called by the generated git-rsrs config.
-    #[command(hide = true)]
-    RunHook { id: String, phase: String },
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
-    if let Command::RunHook { id, phase } = &cli.command {
-        return run_hook(id, phase);
-    }
-    match run(cli.command) {
+    let command = match Cli::parse().command {
+        Command::RunHook { id, phase } => return run_hook(&id, &phase),
+        Command::Managed(command) => command,
+    };
+    match run(command) {
         Ok(report) => {
             if !report.text.is_empty() {
                 println!("{}", report.text);
@@ -109,11 +117,11 @@ fn one_line(message: &str) -> String {
     message.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn run(command: Command) -> Result<Report, CommandError> {
+fn run(command: Managed) -> Result<Report, CommandError> {
     let launchd = Launchctl::current();
     let ctx = context(&launchd)?;
     match command {
-        Command::Add {
+        Managed::Add {
             path,
             id,
             branch,
@@ -133,23 +141,20 @@ fn run(command: Command) -> Result<Report, CommandError> {
                 allow_hooks,
             },
         ),
-        Command::Remove { id } => commands::remove(&ctx, &id),
-        Command::Pause { id } => commands::pause(&ctx, &id),
-        Command::Resume { id } => commands::resume(&ctx, &id),
-        Command::Refresh { id } => commands::refresh(&ctx, id.as_deref()),
-        Command::Restart { id } => commands::restart(&ctx, &id),
-        Command::Sync { id } => commands::sync(&ctx, &id),
-        Command::Allow { id, yes } => allow(&ctx, &id, yes),
-        Command::Status => {
+        Managed::Remove { id } => commands::remove(&ctx, &id),
+        Managed::Pause { id } => commands::pause(&ctx, &id),
+        Managed::Resume { id } => commands::resume(&ctx, &id),
+        Managed::Refresh { id } => commands::refresh(&ctx, id.as_deref()),
+        Managed::Restart { id } => commands::restart(&ctx, &id),
+        Managed::Sync { id } => commands::sync(&ctx, &id),
+        Managed::Allow { id, yes } => allow(&ctx, &id, yes),
+        Managed::Status => {
             let awake = rsrsbar::awake_since().map_err(|source| CommandError::Io {
                 path: PathBuf::from("/usr/sbin/sysctl"),
                 source,
             })?;
             commands::status(&ctx, awake)
         }
-        Command::RunHook { .. } => Err(CommandError::Refused(
-            "run-hook is handled before the command context".to_owned(),
-        )),
     }
 }
 

@@ -9,9 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::allow::snapshot_refusal;
-use super::lifecycle::registered;
-use super::{CommandError, Ctx, io_error};
-use crate::trust::{snapshot_digest, snapshot_hooks};
+use super::{CommandError, Ctx, io_error, registered};
+use crate::trust::{EXEC_BITS, snapshot_digest, snapshot_hooks};
 
 const DIFF: &str = "/usr/bin/diff";
 const NO_CHANGES: &str = "no changes since the last allow";
@@ -20,7 +19,6 @@ const UNVERIFIED: &str = "note: the allowed snapshot does not match the recorded
                           every hook is shown as new";
 /// `diff` exit status when the trees differ.
 const DIFF_DIFFERENT: i32 = 1;
-const EXEC_BITS: u32 = 0o111;
 const PERMISSION_BITS: u32 = 0o777;
 
 /// The preview text and the digest of the hooks it shows; `allow` refuses
@@ -148,33 +146,39 @@ fn change_line(path: &Path, old: Option<&Node>, new: Option<&Node>) -> Option<St
 /// Every non-directory entry under `root` by relative path; a missing root
 /// is empty.
 fn nodes(root: &Path) -> Result<BTreeMap<PathBuf, Node>, CommandError> {
-    let mut found = BTreeMap::new();
-    walk(root, Path::new(""), &mut found).map_err(io_error(root))?;
-    Ok(found)
+    Ok(walk(root, Path::new(""))
+        .map_err(io_error(root))?
+        .into_iter()
+        .collect())
 }
 
-fn walk(dir: &Path, prefix: &Path, found: &mut BTreeMap<PathBuf, Node>) -> io::Result<()> {
+fn walk(dir: &Path, prefix: &Path) -> io::Result<Vec<(PathBuf, Node)>> {
     let items = match fs::read_dir(dir) {
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
         other => other?,
     };
+    let mut found = Vec::new();
     for item in items {
         let item = item?;
         let relative = prefix.join(item.file_name());
         let meta = fs::symlink_metadata(item.path())?;
-        let node = if meta.is_dir() {
-            walk(&item.path(), &relative, found)?;
-            continue;
-        } else if meta.file_type().is_symlink() {
-            Node::Symlink(fs::read_link(item.path())?)
-        } else if meta.is_file() {
-            Node::File {
-                mode: meta.permissions().mode() & PERMISSION_BITS,
-            }
+        if meta.is_dir() {
+            found.extend(walk(&item.path(), &relative)?);
         } else {
-            Node::Other
-        };
-        found.insert(relative, node);
+            found.push((relative, node(&item.path(), &meta)?));
+        }
     }
-    Ok(())
+    Ok(found)
+}
+
+fn node(path: &Path, meta: &fs::Metadata) -> io::Result<Node> {
+    Ok(if meta.file_type().is_symlink() {
+        Node::Symlink(fs::read_link(path)?)
+    } else if meta.is_file() {
+        Node::File {
+            mode: meta.permissions().mode() & PERMISSION_BITS,
+        }
+    } else {
+        Node::Other
+    })
 }

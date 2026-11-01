@@ -6,13 +6,13 @@ use std::path::{Component, Path, PathBuf};
 
 use tempfile::TempDir;
 
-use super::allow::snapshot;
-use super::{CommandError, Ctx, Report, install_service, lock_services, remove_file};
+use super::allow::snapshot_refusal;
+use super::{CommandError, Ctx, Report, hooks_text, install_service, lock_services, remove_file};
 use crate::git::{RepoProbe, probe};
 use crate::gitrsrs::check_version;
 use crate::paths::{RepoId, watch_label};
 use crate::registry::{Registry, RepoEntry};
-use crate::trust::{hooks_digest, present_hooks};
+use crate::trust::{hooks_digest, snapshot_hooks};
 
 const AUTOSYNC_DIR: &str = ".autosync";
 const DEFAULT_REMOTE: &str = "origin";
@@ -169,6 +169,13 @@ fn start_with_hooks(
     started
 }
 
+/// Snapshots `entry`'s `.autosync/` as its allowed hooks and returns the
+/// snapshot's digest.
+fn snapshot(ctx: &Ctx, entry: &RepoEntry) -> Result<String, CommandError> {
+    let dest = ctx.paths.allowed_hooks_dir(&entry.id);
+    snapshot_hooks(&entry.path, &dest).map_err(|err| snapshot_refusal(err, &entry.id, &dest))
+}
+
 /// Moves an existing snapshot at `dest` into a temporary sibling holder.
 fn set_aside(dest: &Path) -> Result<Option<TempDir>, CommandError> {
     let Some(parent) = dest.parent().filter(|_| fs::symlink_metadata(dest).is_ok()) else {
@@ -210,15 +217,7 @@ fn remove_service_files(ctx: &Ctx, entry: &RepoEntry) {
 }
 
 fn added_text(ctx: &Ctx, entry: &RepoEntry) -> String {
-    let hooks: Vec<_> = present_hooks(&entry.path)
-        .iter()
-        .map(|phase| phase.file_name())
-        .collect();
-    let hooks = if hooks.is_empty() {
-        "none".to_owned()
-    } else {
-        hooks.join(", ")
-    };
+    let hooks = hooks_text(&entry.path);
     let mut lines = vec![
         format!("added {}", entry.id),
         format!(

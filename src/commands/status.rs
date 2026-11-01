@@ -3,13 +3,12 @@
 
 use std::time::{Duration, SystemTime};
 
-use super::{CommandError, Ctx, Report};
+use super::{CommandError, Ctx, Report, hooks_text};
 use crate::episode::{RepoMemory, State};
 use crate::health::{Color, classify};
 use crate::observe::{ObserveError, observe};
 use crate::registry::{Registry, RepoEntry};
 use crate::status::{StatusFile, StatusRead};
-use crate::trust::present_hooks;
 
 const HEARTBEAT_LABEL: &str = "com.nicecab.rsrsbar.heartbeat";
 const SECS_PER_MINUTE: u64 = 60;
@@ -74,15 +73,7 @@ fn block(
         Some(label) => format!("{}  {}  {label}", entry.id, color_name(health.color)),
         None => format!("{}  {}", entry.id, color_name(health.color)),
     };
-    let hooks: Vec<_> = present_hooks(&entry.path)
-        .iter()
-        .map(|phase| phase.file_name())
-        .collect();
-    let hooks = if hooks.is_empty() {
-        "none".to_owned()
-    } else {
-        hooks.join(", ")
-    };
+    let hooks = hooks_text(&entry.path);
     let message = match &snapshot.status {
         StatusRead::Present(status) => status.display_message().map(str::to_owned),
         _ => None,

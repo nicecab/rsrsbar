@@ -5,19 +5,9 @@
 use std::time::SystemTime;
 
 use super::install::install;
-use super::{CommandError, Ctx, Report, install_service, lock_services};
+use super::{CommandError, Ctx, Report, install_service, lock_services, locked_entry, registered};
 use crate::paths::{RepoId, watch_label};
-use crate::registry::{Registry, RegistryError, RepoEntry};
-
-/// The registered entry for `id`.
-pub(crate) fn registered(ctx: &Ctx, id: &str) -> Result<RepoEntry, CommandError> {
-    let id = RepoId::new(id)?;
-    let registry = Registry::load(&ctx.paths.registry())?;
-    match registry.get(&id) {
-        Some(entry) => Ok(entry.clone()),
-        None => Err(RegistryError::UnknownId(id).into()),
-    }
-}
+use crate::registry::{Registry, RepoEntry};
 
 /// Refuses a paused repository for commands that need its watcher.
 pub(crate) fn refuse_paused(entry: &RepoEntry) -> Result<(), CommandError> {
@@ -47,8 +37,7 @@ fn rfc3339(time: SystemTime) -> String {
 /// Stops the watcher (`bootout`; an unloaded job is fine) and records
 /// `paused_at = now`. Already paused → a note, exit 0.
 pub fn pause(ctx: &Ctx, id: &str) -> Result<Report, CommandError> {
-    let _services = lock_services(ctx)?;
-    let entry = registered(ctx, id)?;
+    let (_services, entry) = locked_entry(ctx, id)?;
     if let Some(since) = &entry.paused_at {
         return Ok(Report::ok(format!(
             "{} is already paused since {since}",
@@ -67,8 +56,7 @@ pub fn pause(ctx: &Ctx, id: &str) -> Result<Report, CommandError> {
 /// `paused_at`: a failed bootstrap (e.g. the label was loaded by hand)
 /// leaves the entry paused. Not paused → a note, exit 0.
 pub fn resume(ctx: &Ctx, id: &str) -> Result<Report, CommandError> {
-    let _services = lock_services(ctx)?;
-    let entry = registered(ctx, id)?;
+    let (_services, entry) = locked_entry(ctx, id)?;
     if entry.paused_at.is_none() {
         return Ok(Report::ok(format!("{} is not paused", entry.id)));
     }
@@ -153,8 +141,7 @@ fn apply(
 
 /// Restarts the watcher (`kickstart -k`), the menu's Restart watcher.
 pub fn restart(ctx: &Ctx, id: &str) -> Result<Report, CommandError> {
-    let _services = lock_services(ctx)?;
-    let entry = registered(ctx, id)?;
+    let (_services, entry) = locked_entry(ctx, id)?;
     refuse_paused(&entry)?;
     ctx.launchd.kickstart(&watch_label(&entry.id))?;
     Ok(Report::ok(format!("restarted {}", entry.id)))

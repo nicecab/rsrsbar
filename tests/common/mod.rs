@@ -169,3 +169,20 @@ pub fn rsrsbar(fx: &Fixture) -> Command {
         .stdin(std::process::Stdio::null());
     command
 }
+
+pub fn id(s: &str) -> rsrsbar::RepoId {
+    rsrsbar::RepoId::new(s).expect("valid id")
+}
+
+/// `add` arguments for `path` with every option at its default.
+pub fn add_args(path: &Path) -> rsrsbar::commands::AddArgs {
+    rsrsbar::commands::AddArgs {
+        path: path.to_path_buf(),
+        id: None,
+        branch: None,
+        remote: None,
+        lock_name: None,
+        interval: None,
+        allow_hooks: false,
+    }
+}

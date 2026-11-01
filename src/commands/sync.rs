@@ -1,7 +1,7 @@
 //! `rsrsbar sync`: one git-rsrs sync now, under rsrsbar's own deadline.
 
-use super::lifecycle::{refuse_paused, registered};
-use super::{CommandError, Ctx, Report};
+use super::lifecycle::refuse_paused;
+use super::{CommandError, Ctx, Report, registered};
 use crate::gitrsrs::{sync_deadline, sync_once};
 
 /// Runs `git-rsrs sync` once for `id` and passes its output and exit code

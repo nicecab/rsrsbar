@@ -5,23 +5,16 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Output;
 
-use common::{Fixture, now, rsrsbar};
+use common::{Fixture, id, now, rsrsbar};
 use git_rsrs::outcome::{Outcome as RsrsOutcome, SyncReport, Trigger};
 use git_rsrs::status::{Status, next};
 use rsrsbar::commands::{AddArgs, add, allow, allow_preview, remove};
-use rsrsbar::{Recording, Registry, RepoEntry, RepoId, RepoMemory, Row, State, classify, observe};
+use rsrsbar::{Recording, Registry, RepoEntry, RepoMemory, Row, State, classify, observe};
 
 const HOOK_CHANGED: &str = "hook changed — needs allow";
 
-fn id(s: &str) -> RepoId {
-    RepoId::new(s).expect("valid id")
-}
-
 fn write_hook(repo: &Path, phase: &str, body: &str) {
-    let path = repo.join(".autosync").join(phase);
-    fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
-    fs::write(&path, format!("#!/bin/sh\n{body}\n")).expect("write hook");
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
+    common::script(&repo.join(".autosync").join(phase), body);
 }
 
 /// A `pre-commit` that appends `$GIT_INDEX_FILE $RSRS_PHASE` to `marker`
@@ -36,13 +29,9 @@ fn marker_hook(repo: &Path, marker: &Path) {
 
 fn add_repo(fx: &Fixture, repo: &Path, allow_hooks: bool) {
     let args = AddArgs {
-        path: repo.to_path_buf(),
         id: Some("demo".to_owned()),
-        branch: None,
-        remote: None,
-        lock_name: None,
-        interval: None,
         allow_hooks,
+        ..common::add_args(repo)
     };
     add(&fx.ctx(&Recording::new()), args).expect("add");
 }
@@ -357,13 +346,9 @@ fn failed_add_keeps_a_retained_snapshot() {
     let launchd = Recording::new();
     launchd.fail_next_bootstrap();
     let args = AddArgs {
-        path: repo.clone(),
         id: Some("demo".to_owned()),
-        branch: None,
-        remote: None,
-        lock_name: None,
-        interval: None,
         allow_hooks: true,
+        ..common::add_args(&repo)
     };
     assert!(add(&fx.ctx(&launchd), args).is_err());
     assert_eq!(

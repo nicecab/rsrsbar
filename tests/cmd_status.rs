@@ -3,28 +3,16 @@ mod common;
 use std::fs;
 use std::time::{Duration, SystemTime};
 
-use common::{Fixture, now};
+use common::{Fixture, id, now};
 use git_rsrs::outcome::{HookFailure, Outcome as RsrsOutcome, SyncReport, Trigger};
 use git_rsrs::status::{Status, next};
-use rsrsbar::commands::{AddArgs, Report, add, status};
+use rsrsbar::commands::{Report, add, status};
 use rsrsbar::{Recording, RepoId, watch_label};
 
 const MIN: Duration = Duration::from_secs(60);
 
-fn id(s: &str) -> RepoId {
-    RepoId::new(s).expect("valid id")
-}
-
 fn add_repo(fx: &Fixture, name: &str) -> RepoId {
-    let args = AddArgs {
-        path: fx.repo(name, true),
-        id: None,
-        branch: None,
-        remote: None,
-        lock_name: None,
-        interval: None,
-        allow_hooks: false,
-    };
+    let args = common::add_args(&fx.repo(name, true));
     add(&fx.ctx(&Recording::new()), args).expect("add");
     id(name)
 }

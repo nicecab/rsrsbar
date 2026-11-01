@@ -3,18 +3,14 @@
 //! which git-rsrs would read as an intentional pre-commit rejection) — and
 //! it executes the allowed snapshot, never the checkout's file.
 
-use std::fs;
 use std::io;
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::Command;
 
 use crate::paths::{Paths, PathsError, RepoId};
 use crate::registry::{Registry, RegistryError};
-use crate::trust::{Phase, hooks_digest, snapshot_digest};
-
-const EXEC_BITS: u32 = 0o111;
+use crate::trust::{Phase, hooks_digest, is_executable_file, snapshot_digest};
 
 /// Why `run-hook` refused; every variant exits 1.
 #[derive(Debug, thiserror::Error)]
@@ -68,9 +64,7 @@ pub fn run_hook(paths: &Paths, id: &str, phase: &str) -> Result<(), RunHookError
         return Err(RunHookError::HookChanged);
     }
     let hook = snapshot.join(phase.file_name());
-    let executable =
-        fs::metadata(&hook).is_ok_and(|m| m.is_file() && m.permissions().mode() & EXEC_BITS != 0);
-    if !executable {
+    if !is_executable_file(&hook) {
         return Ok(());
     }
     let source = Command::new(&hook).exec();

@@ -4,28 +4,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use common::Fixture;
-use rsrsbar::commands::{AddArgs, CommandError, Ctx, add, pause, refresh, restart, resume, sync};
+use common::{Fixture, id};
+use rsrsbar::commands::{CommandError, Ctx, add, pause, refresh, restart, resume, sync};
 use rsrsbar::{
     GitRsrsError, Launchd, MIN_GIT_RSRS, Recording, Registry, RepoEntry, RepoId, watch_label,
 };
 
-fn id(s: &str) -> RepoId {
-    RepoId::new(s).expect("valid id")
-}
-
 fn add_repo(fx: &Fixture, ctx: &Ctx, name: &str) -> RepoId {
-    let repo = fx.repo(name, true);
-    let args = AddArgs {
-        path: repo,
-        id: None,
-        branch: None,
-        remote: None,
-        lock_name: None,
-        interval: None,
-        allow_hooks: false,
-    };
-    add(ctx, args).expect("add");
+    add(ctx, common::add_args(&fx.repo(name, true))).expect("add");
     id(name)
 }
 

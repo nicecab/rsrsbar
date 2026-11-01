@@ -97,8 +97,8 @@ pub fn sync_deadline(settings: &Settings) -> Duration {
         .saturating_add(MARGIN)
 }
 
-/// A finished one-shot sync: git-rsrs's exit code and its interleaved
-/// stdout and stderr.
+/// A finished one-shot sync: git-rsrs's exit code (128 + the signal number
+/// if a signal ended it) and its interleaved stdout and stderr.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SyncRun {
     pub exit_code: i32,
@@ -182,6 +182,8 @@ fn signal_group(group: libc::pid_t, signal: libc::c_int) -> io::Result<()> {
     }
 }
 
+/// git-rsrs's exit code; a process ended by a signal reports 128 + the
+/// signal number, as a shell does (e.g. 143 for SIGTERM).
 fn exit_code(status: ExitStatus) -> i32 {
     status
         .code()

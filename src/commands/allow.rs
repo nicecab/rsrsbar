@@ -3,13 +3,12 @@
 use std::io;
 use std::path::Path;
 
-use super::lifecycle::registered;
-use super::{CommandError, Ctx, Report, io_error, lock_services};
+use super::{CommandError, Ctx, Report, hooks_text, io_error, locked_entry};
 use crate::episode::State;
 use crate::paths::RepoId;
 use crate::registry::{Registry, RepoEntry};
 use crate::status::{StatusRead, read_status};
-use crate::trust::{present_hooks, snapshot_hooks, snapshot_hooks_matching};
+use crate::trust::snapshot_hooks_matching;
 
 /// A tree that cannot be snapshotted safely (InvalidInput from
 /// `snapshot_hooks`) is a refusal naming the fix; other errors are I/O.
@@ -22,22 +21,15 @@ pub(crate) fn snapshot_refusal(err: io::Error, id: &RepoId, dest: &Path) -> Comm
     }
 }
 
-/// Snapshots `entry`'s `.autosync/` as its allowed hooks and returns the
-/// snapshot's digest.
-pub(crate) fn snapshot(ctx: &Ctx, entry: &RepoEntry) -> Result<String, CommandError> {
-    let dest = ctx.paths.allowed_hooks_dir(&entry.id);
-    snapshot_hooks(&entry.path, &dest).map_err(|err| snapshot_refusal(err, &entry.id, &dest))
-}
-
 /// Stages a snapshot of `.autosync/` and, only if it still has `expected`
 /// — the digest of what the preview showed — swaps it in as the allowed
 /// snapshot, records the digest and moves the recovery point to the current
 /// attempt (`RepoMemory::after_allow`). On a mismatch nothing changes: the
-/// previous snapshot and the recorded digest stay as they were. A state file that cannot be updated is a
-/// warning: the hooks are allowed either way.
+/// previous snapshot and the recorded digest stay as they were. A state
+/// file that cannot be updated is a warning: the hooks are allowed either
+/// way.
 pub fn allow(ctx: &Ctx, id: &str, expected: &str) -> Result<Report, CommandError> {
-    let _services = lock_services(ctx)?;
-    let entry = registered(ctx, id)?;
+    let (_services, entry) = locked_entry(ctx, id)?;
     let dest = ctx.paths.allowed_hooks_dir(&entry.id);
     let matched = snapshot_hooks_matching(&entry.path, &dest, expected)
         .map_err(|err| snapshot_refusal(err, &entry.id, &dest))?;
@@ -55,16 +47,11 @@ pub fn allow(ctx: &Ctx, id: &str, expected: &str) -> Result<Report, CommandError
         })
     })?;
     let moved = move_recovery_point(ctx, &entry.id);
-    let hooks: Vec<_> = present_hooks(&entry.path)
-        .iter()
-        .map(|phase| phase.file_name())
-        .collect();
-    let hooks = if hooks.is_empty() {
-        "none".to_owned()
-    } else {
-        hooks.join(", ")
-    };
-    let mut lines = vec![format!("allowed hooks for {}: {hooks}", entry.id)];
+    let mut lines = vec![format!(
+        "allowed hooks for {}: {}",
+        entry.id,
+        hooks_text(&entry.path)
+    )];
     if let Err(err) = moved {
         lines.push(format!("warning: cannot update the state file: {err}"));
     }

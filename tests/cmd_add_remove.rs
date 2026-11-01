@@ -2,28 +2,12 @@ mod common;
 
 use std::fs;
 use std::os::unix::fs::symlink;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use common::Fixture;
+use common::{Fixture, add_args, id};
 use git_rsrs::config::Config;
 use rsrsbar::commands::{AddArgs, add, remove};
-use rsrsbar::{Launchd, Recording, Registry, RepoId, RepoMemory, State, hooks_digest, watch_label};
-
-fn args(path: &Path) -> AddArgs {
-    AddArgs {
-        path: path.to_path_buf(),
-        id: None,
-        branch: None,
-        remote: None,
-        lock_name: None,
-        interval: None,
-        allow_hooks: false,
-    }
-}
-
-fn id(s: &str) -> RepoId {
-    RepoId::new(s).expect("valid id")
-}
+use rsrsbar::{Launchd, Recording, Registry, RepoMemory, State, hooks_digest, watch_label};
 
 fn registry(fx: &Fixture) -> Registry {
     Registry::load(&fx.paths.registry()).expect("registry")
@@ -35,7 +19,7 @@ fn add_registers_and_bootstraps() {
     let repo = fx.repo("demo-repo", true);
     let launchd = Recording::new();
 
-    let report = add(&fx.ctx(&launchd), args(&repo)).expect("add");
+    let report = add(&fx.ctx(&launchd), add_args(&repo)).expect("add");
     assert_eq!(report.exit_code, 0);
     let demo = id("demo-repo");
     let label = watch_label(&demo);
@@ -82,7 +66,7 @@ fn add_refusals() {
     assert_refused(
         &fx,
         &launchd,
-        args(&wt),
+        add_args(&wt),
         &format!(
             "{} is a linked worktree; register the primary checkout",
             wt.display()
@@ -92,7 +76,7 @@ fn add_refusals() {
     let toplevel = repo.canonicalize().expect("canonical");
     let develop = AddArgs {
         branch: Some("develop".to_owned()),
-        ..args(&repo)
+        ..add_args(&repo)
     };
     let copy = format!(
         "{} is on main, not develop; check out develop first",
@@ -102,13 +86,13 @@ fn add_refusals() {
 
     let lonely = fx.repo("lonely", false);
     let copy = "has no remote origin; add it with git remote add origin <url>";
-    assert_refused(&fx, &launchd, args(&lonely), copy);
+    assert_refused(&fx, &launchd, add_args(&lonely), copy);
 
     common::git(&repo, &["checkout", "-q", "--detach"]);
     assert_refused(
         &fx,
         &launchd,
-        args(&repo),
+        add_args(&repo),
         "has a detached HEAD; check out a branch first",
     );
     common::git(&repo, &["checkout", "-q", "main"]);
@@ -116,15 +100,15 @@ fn add_refusals() {
     assert_refused(
         &fx,
         &launchd,
-        args(&fx.root().join("plain")),
+        add_args(&fx.root().join("plain")),
         "not a git checkout",
     );
 
     let old = Fixture::with_git_rsrs("echo 'git-rsrs 0.1.1'");
     let repo = old.repo("repo", true);
     let copy = "git-rsrs 0.1.1 is older than";
-    assert_refused(&old, &launchd, args(&repo), copy);
-    let err = add(&old.ctx(&launchd), args(&repo)).expect_err("old git-rsrs");
+    assert_refused(&old, &launchd, add_args(&repo), copy);
+    let err = add(&old.ctx(&launchd), add_args(&repo)).expect_err("old git-rsrs");
     assert!(
         err.to_string()
             .contains("run brew upgrade nicecab/tap/git-rsrs"),
@@ -137,7 +121,7 @@ fn add_duplicate_spellings() {
     let fx = Fixture::new();
     let launchd = Recording::new();
     let repo = fx.repo("repo", true);
-    add(&fx.ctx(&launchd), args(&repo)).expect("first add");
+    add(&fx.ctx(&launchd), add_args(&repo)).expect("first add");
     let sub = repo.join("sub");
     fs::create_dir_all(&sub).expect("mkdir sub");
     let link = fx.root().join("link");
@@ -145,14 +129,14 @@ fn add_duplicate_spellings() {
     let slash = PathBuf::from(format!("{}/", repo.display()));
 
     for spelling in [&sub, &slash, &link] {
-        let same_id = add(&fx.ctx(&launchd), args(spelling)).expect_err("duplicate");
+        let same_id = add(&fx.ctx(&launchd), add_args(spelling)).expect_err("duplicate");
         assert!(
             same_id.to_string().contains("already registered"),
             "{same_id}"
         );
         let other_id = AddArgs {
             id: Some("other".to_owned()),
-            ..args(spelling)
+            ..add_args(spelling)
         };
         let err = add(&fx.ctx(&launchd), other_id).expect_err("duplicate path");
         assert!(
@@ -172,14 +156,14 @@ fn add_bootstrap_failure_rolls_back() {
     let launchd = Recording::new();
     launchd.fail_next_bootstrap();
 
-    assert!(add(&fx.ctx(&launchd), args(&repo)).is_err());
+    assert!(add(&fx.ctx(&launchd), add_args(&repo)).is_err());
     assert!(registry(&fx).repos.is_empty());
     assert!(fx.home_files().is_empty(), "{:?}", fx.home_files());
     assert!(!fx.paths.repo_dir(&id("repo")).exists());
 
     let leftover = Recording::new().with_loaded(&watch_label(&id("repo")), Some(4321));
     assert!(
-        add(&fx.ctx(&leftover), args(&repo)).is_err(),
+        add(&fx.ctx(&leftover), add_args(&repo)).is_err(),
         "label left loaded"
     );
     assert!(registry(&fx).repos.is_empty());
@@ -192,7 +176,7 @@ fn remove_tolerates_unloaded_job() {
     let repo = fx.repo("repo", true);
     let launchd = Recording::new();
     let ctx = fx.ctx(&launchd);
-    add(&ctx, args(&repo)).expect("add");
+    add(&ctx, add_args(&repo)).expect("add");
     let repo_id = id("repo");
     let label = watch_label(&repo_id);
     let status = fx.paths.status_file(&repo_id);
@@ -237,7 +221,7 @@ fn add_refuses_a_loaded_unregistered_label() {
     }
     let launchd = Recording::new().with_loaded(&label, Some(4321));
 
-    let err = add(&fx.ctx(&launchd), args(&repo)).expect_err("orphan job");
+    let err = add(&fx.ctx(&launchd), add_args(&repo)).expect_err("orphan job");
     let copy = format!(
         "{label} is already loaded but not registered; run launchctl bootout gui/$(id -u)/{label} first"
     );

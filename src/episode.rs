@@ -2,14 +2,12 @@
 //! episode and the recovery point, persisted in `state.json`.
 
 use std::collections::BTreeMap;
-use std::ffi::OsString;
-use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::atomic::{read_optional, write_atomic};
+use crate::atomic::{lock_sibling, read_optional, write_atomic};
 use crate::health::{Color, Health, Notify, RELEASE_SUCCESSES, Row};
 use crate::paths::RepoId;
 use crate::status::StatusFile;
@@ -223,12 +221,7 @@ impl State {
     /// A missing state starts empty; a corrupt one is an error, never
     /// overwritten. The lock is released when the file is dropped.
     pub fn update(path: &Path, f: impl FnOnce(&State) -> State) -> Result<State, StateError> {
-        let lock_path = lock_path(path);
-        if let Some(parent) = lock_path.parent() {
-            fs::create_dir_all(parent).map_err(|source| io_error(parent, source))?;
-        }
-        let lock = File::create(&lock_path).map_err(|source| io_error(&lock_path, source))?;
-        lock.lock().map_err(|source| io_error(&lock_path, source))?;
+        let lock = lock_sibling(path).map_err(|(failed, source)| io_error(&failed, source))?;
         let updated = f(&State::load(path)?);
         updated.save(path)?;
         drop(lock);
@@ -249,12 +242,6 @@ impl State {
             repos,
         }
     }
-}
-
-fn lock_path(path: &Path) -> PathBuf {
-    let mut name = OsString::from(path.as_os_str());
-    name.push(".lock");
-    PathBuf::from(name)
 }
 
 fn io_error(path: &Path, source: io::Error) -> StateError {

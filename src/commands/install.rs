@@ -19,31 +19,35 @@ pub struct ServiceChange {
     pub plist: bool,
 }
 
-impl ServiceChange {
-    pub fn any(self) -> bool {
-        self.config || self.plist
-    }
+/// A file an install replaced, with what it held before (`None`: it did
+/// not exist).
+struct Rewritten {
+    path: PathBuf,
+    previous: Option<Vec<u8>>,
 }
 
-/// A finished install: what changed and the previous contents of every
-/// rewritten file (`None` = it did not exist).
+/// A finished install: what changed and every file it rewrote.
 pub(crate) struct Install {
     pub(crate) change: ServiceChange,
-    previous: Vec<(PathBuf, Option<Vec<u8>>)>,
+    rewritten: Vec<Rewritten>,
 }
 
 impl Install {
     /// Puts the rewritten files back as they were, so the next install sees
     /// the change again and repeats the launchd action that went with it.
     pub(crate) fn undo(&self) -> Result<(), CommandError> {
-        for (path, bytes) in &self.previous {
-            match bytes {
-                Some(bytes) => write_atomic(path, bytes).map_err(io_error(path))?,
-                None => remove_file(path)?,
-            }
-        }
-        Ok(())
+        restore(&self.rewritten)
     }
+}
+
+fn restore(rewritten: &[Rewritten]) -> Result<(), CommandError> {
+    for file in rewritten {
+        match &file.previous {
+            Some(bytes) => write_atomic(&file.path, bytes).map_err(io_error(&file.path))?,
+            None => remove_file(&file.path)?,
+        }
+    }
+    Ok(())
 }
 
 /// Writes `entry`'s git-rsrs config and LaunchAgent plist (creating its
@@ -66,49 +70,41 @@ pub(crate) fn install(ctx: &Ctx, entry: &RepoEntry) -> Result<Install, CommandEr
     }
     let config_path = ctx.paths.git_rsrs_config(&entry.id);
     let plist_path = ctx.paths.launch_agent(&entry.id);
-    let config_previous = write_if_changed(&config_path, config.as_bytes())?;
-    let config_written = Install {
-        change: ServiceChange {
-            config: config_previous.is_some(),
-            plist: false,
-        },
-        previous: config_previous
-            .map(|bytes| vec![(config_path, bytes)])
-            .unwrap_or_default(),
-    };
+    let config_rewritten = write_if_changed(&config_path, config.as_bytes())?;
     // All or nothing: a failed plist step puts the config back, so the
     // next install sees the whole change again.
-    let plist_previous = match write_if_changed(&plist_path, &plist) {
-        Ok(previous) => previous,
+    let plist_rewritten = match write_if_changed(&plist_path, &plist) {
+        Ok(rewritten) => rewritten,
         Err(err) => {
-            config_written.undo()?;
+            restore(config_rewritten.as_slice())?;
             return Err(err);
         }
     };
     Ok(Install {
         change: ServiceChange {
-            plist: plist_previous.is_some(),
-            ..config_written.change
+            config: config_rewritten.is_some(),
+            plist: plist_rewritten.is_some(),
         },
-        previous: config_written
-            .previous
+        rewritten: config_rewritten
             .into_iter()
-            .chain(plist_previous.map(|bytes| (plist_path, bytes)))
+            .chain(plist_rewritten)
             .collect(),
     })
 }
 
-/// Writes `bytes` unless the file already holds them. Returns `None` when
-/// unchanged, else `Some(previous contents)` (`Some(None)`: no file before).
-fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<Option<Option<Vec<u8>>>, CommandError> {
-    let current = match fs::read(path) {
+/// Writes `bytes` unless the file already holds them; `None` when it did.
+fn write_if_changed(path: &Path, bytes: &[u8]) -> Result<Option<Rewritten>, CommandError> {
+    let previous = match fs::read(path) {
         Ok(bytes) => Some(bytes),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(io_error(path)(e)),
     };
-    if current.as_deref() == Some(bytes) {
+    if previous.as_deref() == Some(bytes) {
         return Ok(None);
     }
     write_atomic(path, bytes).map_err(io_error(path))?;
-    Ok(Some(current))
+    Ok(Some(Rewritten {
+        path: path.to_path_buf(),
+        previous,
+    }))
 }

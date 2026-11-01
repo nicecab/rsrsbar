@@ -10,9 +10,10 @@ use crate::episode::StateError;
 use crate::git::GitError;
 use crate::gitrsrs::GitRsrsError;
 use crate::launchd::{Launchd, LaunchdError};
-use crate::paths::{Paths, PathsError};
-use crate::registry::RegistryError;
+use crate::paths::{Paths, PathsError, RepoId};
+use crate::registry::{Registry, RegistryError, RepoEntry};
 use crate::service::ServiceError;
+use crate::trust::present_hooks;
 
 mod add;
 mod allow;
@@ -106,8 +107,8 @@ pub(crate) fn io_error(path: &Path) -> impl FnOnce(io::Error) -> CommandError + 
 }
 
 /// The service lock. Every command that changes a repository's service
-/// files, launchd job or registry entry (`add`, `remove`, and later
-/// `pause`, `resume`, `refresh`, `allow`) holds it from its first registry
+/// files, launchd job or registry entry (`add`, `remove`, `pause`,
+/// `resume`, `refresh`, `restart`, `allow`) holds it from its first registry
 /// read to its last write, so it never acts on a registry view that another
 /// command has changed in between. Released when the returned handle drops.
 ///
@@ -121,6 +122,41 @@ pub(crate) fn lock_services(ctx: &Ctx) -> Result<File, CommandError> {
     let handle = File::open(&dir).map_err(io_error(&dir))?;
     handle.lock().map_err(io_error(&dir))?;
     Ok(handle)
+}
+
+/// The registered entry for `id`.
+pub(crate) fn registered(ctx: &Ctx, id: &str) -> Result<RepoEntry, CommandError> {
+    lookup(ctx, &RepoId::new(id)?)
+}
+
+fn lookup(ctx: &Ctx, id: &RepoId) -> Result<RepoEntry, CommandError> {
+    match Registry::load(&ctx.paths.registry())?.get(id) {
+        Some(entry) => Ok(entry.clone()),
+        None => Err(RegistryError::UnknownId(id.clone()).into()),
+    }
+}
+
+/// Takes the service lock and only then looks `id` up, so a command that
+/// changes a service never acts on an entry read before it held the lock.
+/// The lock is held until the returned file drops.
+pub(crate) fn locked_entry(ctx: &Ctx, id: &str) -> Result<(File, RepoEntry), CommandError> {
+    let id = RepoId::new(id)?;
+    let lock = lock_services(ctx)?;
+    Ok((lock, lookup(ctx, &id)?))
+}
+
+/// "pre-commit, post-integrate" for the executable hooks in `repo`, or
+/// "none".
+pub(crate) fn hooks_text(repo: &Path) -> String {
+    let hooks: Vec<_> = present_hooks(repo)
+        .iter()
+        .map(|phase| phase.file_name())
+        .collect();
+    if hooks.is_empty() {
+        "none".to_owned()
+    } else {
+        hooks.join(", ")
+    }
 }
 
 /// Removes `path`; a file that is already gone is fine.
