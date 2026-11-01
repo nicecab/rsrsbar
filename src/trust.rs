@@ -1,16 +1,22 @@
 //! The `.autosync/` hook digest that explicit trust ("allow") records.
 
+use std::ffi::{CString, OsString};
 use std::fs::{self, Metadata};
 use std::io;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::os::unix::fs::{PermissionsExt, symlink};
+use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
+use tempfile::TempDir;
 
 const AUTOSYNC_DIR: &str = ".autosync";
 const DOMAIN: &[u8] = b"rsrsbar .autosync digest v1";
 const EXEC_BITS: u32 = 0o111;
+const MODE_BITS: u32 = 0o7777;
+const STAGING_PREFIX: &str = ".allowed-hooks-";
+/// Link hops followed while resolving one symlink (macOS `MAXSYMLINKS`).
+const MAX_LINK_HOPS: usize = 32;
 
 /// A git-rsrs hook phase that a repository may provide under `.autosync/`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -98,6 +104,168 @@ pub fn present_hooks(repo: &Path) -> Vec<Phase> {
                 .is_ok_and(|m| m.is_file() && m.permissions().mode() & EXEC_BITS != 0)
         })
         .collect()
+}
+
+/// Replaces `dest` with a copy of `<repo>/.autosync/` — files with their
+/// modes, symlinks as symlinks (never followed), directories recursively —
+/// and returns [`hooks_digest`] of the copy laid out as `.autosync/`, which
+/// equals the source's for a tree not modified while it is copied. The copy
+/// is built in a temporary sibling of `dest` and swapped in atomically
+/// (`renamex_np` with `RENAME_SWAP`; a plain rename the first time), so
+/// `dest` is never partial or missing once it exists. A missing
+/// `.autosync/` gives an empty copy.
+///
+/// Refused (`InvalidInput`), because the digest covers a symlink's target
+/// string, not what it points to, so the copy would run content that was
+/// never allowed: a `.autosync` that is not a real directory, an entry that
+/// is neither file, symlink nor directory, and a symlink whose target is
+/// absolute or resolves — lexically, following links inside the tree —
+/// outside `.autosync/`. Relative links within the tree are kept.
+pub fn snapshot_hooks(repo: &Path, dest: &Path) -> io::Result<String> {
+    let root = repo.join(AUTOSYNC_DIR);
+    let parent = match dest.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    fs::create_dir_all(parent)?;
+    let staging = tempfile::Builder::new()
+        .prefix(STAGING_PREFIX)
+        .tempdir_in(parent)?;
+    match fs::symlink_metadata(&root) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+        Ok(meta) if meta.is_dir() => copy_tree(&root, &root, staging.path())?,
+        Ok(_) => return Err(not_copyable(&root, "is not a directory")),
+    }
+    let digest = hash(sorted(collect(staging.path(), Path::new(""))?));
+    replace_dir(staging, dest)?;
+    Ok(digest)
+}
+
+fn not_copyable(path: &Path, why: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("{} {why}", path.display()),
+    )
+}
+
+fn copy_tree(root: &Path, src: &Path, dst: &Path) -> io::Result<()> {
+    for item in fs::read_dir(src)? {
+        let path = item?.path();
+        let Some(name) = path.file_name() else {
+            continue;
+        };
+        let target = dst.join(name);
+        let meta = fs::symlink_metadata(&path)?;
+        let file_type = meta.file_type();
+        if file_type.is_symlink() {
+            check_internal_link(root, &path)?;
+            symlink(fs::read_link(&path)?, &target)?;
+            continue;
+        }
+        if file_type.is_dir() {
+            fs::create_dir(&target)?;
+            copy_tree(root, &path, &target)?;
+        } else if file_type.is_file() {
+            fs::copy(&path, &target)?;
+        } else {
+            return Err(not_copyable(&path, "is not a file, symlink or directory"));
+        }
+        // After the recursion, so a read-only directory can still be filled.
+        let mode = meta.permissions().mode() & MODE_BITS;
+        fs::set_permissions(&target, fs::Permissions::from_mode(mode))?;
+    }
+    Ok(())
+}
+
+/// One step of a path being resolved below the tree root.
+enum Step {
+    Up,
+    Down(OsString),
+}
+
+/// The steps of a symlink target; `None` for an absolute target.
+fn steps(target: &Path) -> Option<Vec<Step>> {
+    let mut steps = Vec::new();
+    for component in target.components() {
+        match component {
+            Component::RootDir | Component::Prefix(_) => return None,
+            Component::CurDir => {}
+            Component::ParentDir => steps.push(Step::Up),
+            Component::Normal(name) => steps.push(Step::Down(name.to_os_string())),
+        }
+    }
+    Some(steps)
+}
+
+/// Fails unless the symlink `link` (inside `root`) resolves to a path
+/// inside `root`: `..` past the root, an absolute target anywhere in the
+/// chain, or more than [`MAX_LINK_HOPS`] links is a refusal.
+fn check_internal_link(root: &Path, link: &Path) -> io::Result<()> {
+    let leaves = |target: &Path| {
+        not_copyable(
+            link,
+            &format!("links outside .autosync/ (via {})", target.display()),
+        )
+    };
+    let relative = link.strip_prefix(root).map_err(|_| leaves(link))?;
+    let mut at: Vec<OsString> = relative
+        .parent()
+        .map(|dir| dir.iter().map(OsString::from).collect())
+        .unwrap_or_default();
+    let target = fs::read_link(link)?;
+    let mut todo = steps(&target).ok_or_else(|| leaves(&target))?;
+    todo.reverse();
+    let mut hops = 0;
+    while let Some(step) = todo.pop() {
+        let name = match step {
+            Step::Up => {
+                at.pop().ok_or_else(|| leaves(&target))?;
+                continue;
+            }
+            Step::Down(name) => name,
+        };
+        let here: PathBuf = root.join(at.iter().collect::<PathBuf>()).join(&name);
+        if !fs::symlink_metadata(&here).is_ok_and(|m| m.file_type().is_symlink()) {
+            at.push(name);
+            continue;
+        }
+        hops += 1;
+        let next = fs::read_link(&here)?;
+        let next_steps = steps(&next).filter(|_| hops <= MAX_LINK_HOPS);
+        todo.extend(next_steps.ok_or_else(|| leaves(&next))?.into_iter().rev());
+    }
+    Ok(())
+}
+
+/// Puts `staging` in place of `dest`. An existing `dest` is exchanged with
+/// it atomically, so a reader or a crash sees either the old or the new
+/// copy, never none; the old copy then sits at the staging path and is
+/// removed with it.
+fn replace_dir(staging: TempDir, dest: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(dest) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            fs::rename(staging.path(), dest)?;
+            // The staging path is now `dest`; nothing is left to remove.
+            let _ = staging.keep();
+            Ok(())
+        }
+        Err(e) => Err(e),
+        Ok(_) => swap(staging.path(), dest),
+    }
+}
+
+fn swap(a: &Path, b: &Path) -> io::Result<()> {
+    let c_path = |p: &Path| {
+        CString::new(p.as_os_str().as_bytes()).map_err(|_| not_copyable(p, "contains a NUL byte"))
+    };
+    let (a, b) = (c_path(a)?, c_path(b)?);
+    // SAFETY: both pointers come from live, NUL-terminated CStrings.
+    if unsafe { libc::renamex_np(a.as_ptr(), b.as_ptr(), libc::RENAME_SWAP) } == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
 }
 
 fn collect(dir: &Path, prefix: &Path) -> io::Result<Vec<Entry>> {

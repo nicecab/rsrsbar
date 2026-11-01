@@ -1,4 +1,6 @@
 use std::fs;
+use std::sync::{Arc, Barrier};
+use std::thread;
 use std::time::{Duration, SystemTime};
 
 use git_rsrs::outcome::{HookFailure, Outcome as RsrsOutcome, SyncReport, Trigger};
@@ -370,4 +372,33 @@ fn episode_end_forgets_the_failure_label() {
     let last = steps.last().expect("steps");
     assert_eq!(last.health.row, Row::FailureRun);
     assert_eq!(last.health.phase, None);
+}
+
+#[test]
+fn state_update_is_locked() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let path = Arc::new(tmp.path().join("support/state.json"));
+    let barrier = Arc::new(Barrier::new(8));
+    let handles: Vec<_> = (0..8)
+        .map(|n| {
+            let path = Arc::clone(&path);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                let id = RepoId::new(&format!("repo-{n}")).expect("valid id");
+                barrier.wait();
+                State::update(&path, |s| s.with_repo(&id, RepoMemory::default())).expect("update");
+            })
+        })
+        .collect();
+    for handle in handles {
+        handle.join().expect("thread");
+    }
+    let state = State::load(&path).expect("load");
+    assert_eq!(state.repos.len(), 8, "no update was lost");
+
+    fs::write(path.as_ref(), "{ not json").expect("corrupt");
+    assert!(
+        State::update(&path, State::clone).is_err(),
+        "a corrupt state is not silently replaced"
+    );
 }

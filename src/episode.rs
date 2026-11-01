@@ -2,6 +2,8 @@
 //! episode and the recovery point, persisted in `state.json`.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
+use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -215,6 +217,24 @@ impl State {
         write_atomic(path, &bytes).map_err(|source| io_error(path, source))
     }
 
+    /// Locked read-modify-write, shared by the CLI and the app: holds an
+    /// exclusive lock on the sibling `<path>.lock` (never replaced, unlike
+    /// the state itself) across load, `f` and save, like `Registry::update`.
+    /// A missing state starts empty; a corrupt one is an error, never
+    /// overwritten. The lock is released when the file is dropped.
+    pub fn update(path: &Path, f: impl FnOnce(&State) -> State) -> Result<State, StateError> {
+        let lock_path = lock_path(path);
+        if let Some(parent) = lock_path.parent() {
+            fs::create_dir_all(parent).map_err(|source| io_error(parent, source))?;
+        }
+        let lock = File::create(&lock_path).map_err(|source| io_error(&lock_path, source))?;
+        lock.lock().map_err(|source| io_error(&lock_path, source))?;
+        let updated = f(&State::load(path)?);
+        updated.save(path)?;
+        drop(lock);
+        Ok(updated)
+    }
+
     /// A copy with `id`'s memory replaced.
     pub fn with_repo(&self, id: &RepoId, memory: RepoMemory) -> State {
         let repos = self
@@ -229,6 +249,12 @@ impl State {
             repos,
         }
     }
+}
+
+fn lock_path(path: &Path) -> PathBuf {
+    let mut name = OsString::from(path.as_os_str());
+    name.push(".lock");
+    PathBuf::from(name)
 }
 
 fn io_error(path: &Path, source: io::Error) -> StateError {
