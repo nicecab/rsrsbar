@@ -34,6 +34,10 @@ enum Command {
     #[cfg(target_os = "macos")]
     #[command(hide = true)]
     NotifyTest { text: String },
+    /// Run the menu bar app; started by its LaunchAgent.
+    #[cfg(target_os = "macos")]
+    #[command(hide = true)]
+    App,
     #[command(flatten)]
     Managed(Managed),
 }
@@ -94,6 +98,8 @@ fn main() -> ExitCode {
         Command::InfoPlist => return info_plist(),
         #[cfg(target_os = "macos")]
         Command::NotifyTest { text } => return notify_test(&text),
+        #[cfg(target_os = "macos")]
+        Command::App => return app(),
         Command::Managed(command) => command,
     };
     match run(command) {
@@ -257,18 +263,35 @@ fn home() -> Result<PathBuf, CommandError> {
         .ok_or_else(|| CommandError::Refused("HOME is not set".to_owned()))
 }
 
-fn context(launchd: &Launchctl) -> Result<Ctx<'_>, CommandError> {
-    let home = home()?;
+/// The running binary, canonicalized (what generated configs call back).
+fn current_exe() -> Result<PathBuf, CommandError> {
     let exe = std::env::current_exe().and_then(|exe| exe.canonicalize());
-    let rsrsbar_exe = exe.map_err(|source| CommandError::Io {
+    exe.map_err(|source| CommandError::Io {
         path: PathBuf::from("current executable"),
         source,
-    })?;
+    })
+}
+
+fn context(launchd: &Launchctl) -> Result<Ctx<'_>, CommandError> {
     Ok(Ctx {
-        paths: Paths::new(home),
+        paths: Paths::new(home()?),
         launchd,
         git_rsrs: PathBuf::from(GIT_RSRS),
-        rsrsbar_exe,
+        rsrsbar_exe: current_exe()?,
         now: SystemTime::now(),
     })
+}
+
+/// `rsrsbar app`: never returns unless it cannot start.
+#[cfg(target_os = "macos")]
+fn app() -> ExitCode {
+    match home().and_then(|home| Ok((home, current_exe()?))) {
+        Ok((home, exe)) => {
+            rsrsbar::app::shell::run_app(Paths::new(home), PathBuf::from(GIT_RSRS), exe)
+        }
+        Err(err) => {
+            eprintln!("rsrsbar: {}", one_line(&err.to_string()));
+            ExitCode::from(err.exit_code())
+        }
+    }
 }

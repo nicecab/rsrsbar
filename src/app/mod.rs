@@ -9,6 +9,14 @@ pub mod menu;
 #[cfg(target_os = "macos")]
 pub mod notify;
 pub mod poll;
+#[cfg(target_os = "macos")]
+pub mod shell;
+#[cfg(target_os = "macos")]
+mod shell_allow;
+#[cfg(target_os = "macos")]
+mod shell_render;
+#[cfg(target_os = "macos")]
+mod shell_workers;
 
 /// Whether the app may show notifications, as macOS reports it. `Unknown`
 /// when the answer did not arrive in time or the process has no bundle.
