@@ -355,6 +355,6 @@ fn in_grace(obs: &Observation) -> bool {
 }
 
 /// `now − since`, zero when `since` is in the future (clock skew).
-fn elapsed(since: SystemTime, now: SystemTime) -> Duration {
+pub(crate) fn elapsed(since: SystemTime, now: SystemTime) -> Duration {
     now.duration_since(since).unwrap_or(Duration::ZERO)
 }

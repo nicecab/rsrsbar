@@ -4,10 +4,10 @@ use std::fs;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
-use common::{Fixture, add_args, id, now, running, sync_report, write_status};
+use common::{Fixture, add_repo, id, now, running, sync_report, write_status};
 use git_rsrs::outcome::{HookFailure, Outcome as RsrsOutcome, SyncReport};
 use rsrsbar::app::poll::{PollOutcome, acquire_instance, poll};
-use rsrsbar::commands::{Ctx, add};
+use rsrsbar::commands::Ctx;
 use rsrsbar::heartbeat::Heartbeat;
 use rsrsbar::{
     Authorization, Color, Notice, Recording, RecoveryPoint, RepoId, RepoMemory, Row, State,
@@ -15,11 +15,6 @@ use rsrsbar::{
 
 const MIN: Duration = Duration::from_secs(60);
 const DAY: Duration = Duration::from_secs(86_400);
-
-fn add_repo(fx: &Fixture, name: &str) -> RepoId {
-    add(&fx.ctx(&Recording::new()), add_args(&fx.repo(name, true))).expect("add");
-    id(name)
-}
 
 /// One poll at `at` by a fresh "process": a new `Ctx` over `launchd`, long
 /// after the last wake, notifications authorized.

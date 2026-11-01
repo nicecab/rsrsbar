@@ -33,15 +33,12 @@ use super::menu::build;
 use super::notify::{self, NotificationDelegate};
 use super::poll::{PollOutcome, acquire_instance};
 use super::shell_allow::allow_hooks;
-use super::shell_render::{TAG_INDEX_BITS, ns_menu, render_icon};
+use super::shell_render::{GENERATIONS, ns_menu, render_icon, untag};
 use super::shell_workers::{run_action, spawn_notifier, spawn_poller};
 use crate::commands::Ctx;
 use crate::launchd::Launchctl;
 use crate::paths::{Paths, RepoId};
 use crate::registry::AppSettings;
-
-/// Render generations wrap here, keeping tags well inside `NSInteger`.
-const GENERATIONS: isize = 1 << 20;
 
 /// What the background threads tell the main thread.
 pub(super) enum Event {
@@ -114,12 +111,11 @@ define_class!(
         /// The target of every action item.
         #[unsafe(method(menuAction:))]
         fn menu_action(&self, sender: &NSMenuItem) {
-            let tag = sender.tag();
+            let (generation, index) = untag(sender.tag());
             let action = {
                 let view = self.ivars().view.borrow();
-                let current = view.generation == tag >> TAG_INDEX_BITS;
-                let index = usize::try_from(tag & ((1 << TAG_INDEX_BITS) - 1)).ok();
-                index.filter(|_| current).and_then(|i| view.actions.get(i).cloned())
+                let current = view.generation == generation;
+                view.actions.get(index).filter(|_| current).cloned()
             };
             match action {
                 Some(action) => self.dispatch(action),
@@ -207,24 +203,19 @@ impl Shell {
     }
 
     fn handle(&self, event: Event) {
-        if let Event::Clicked(repo) = event {
-            return self.clicked(&repo);
-        }
-        {
-            let mut view = self.ivars().view.borrow_mut();
-            match event {
-                Event::Polled {
-                    outcome,
-                    notifications,
-                    app,
-                } => {
-                    view.outcome = outcome;
-                    view.notifications = Some(notifications);
-                    view.app = app;
-                }
-                Event::Synced(id) => drop(view.busy.remove(&id)),
-                Event::Clicked(_) => {}
+        match event {
+            Event::Clicked(repo) => return self.clicked(&repo),
+            Event::Polled {
+                outcome,
+                notifications,
+                app,
+            } => {
+                let mut view = self.ivars().view.borrow_mut();
+                view.outcome = outcome;
+                view.notifications = Some(notifications);
+                view.app = app;
             }
+            Event::Synced(id) => drop(self.ivars().view.borrow_mut().busy.remove(&id)),
         }
         self.render();
     }

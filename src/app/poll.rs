@@ -37,8 +37,13 @@ pub struct PollOutcome {
     pub warnings: Vec<String>,
 }
 
-/// A repository observed outside the state lock.
-type Observed = (RepoEntry, Result<RepoSnapshot, String>);
+/// A repository observed outside the state lock (the filesystem and
+/// launchd are read here, never while the state lock is held).
+struct Observed {
+    entry: RepoEntry,
+    snapshot: Result<RepoSnapshot, String>,
+    hooks: Vec<Phase>,
+}
 
 /// Polls every registered repository at `ctx.now` and writes the
 /// heartbeat. An unreadable registry means "unknown which repositories
@@ -76,9 +81,10 @@ fn observe_all(ctx: &Ctx, registry: &Registry) -> Vec<Observed> {
     registry
         .repos
         .iter()
-        .map(|entry| {
-            let snapshot = observe(entry, &ctx.paths, ctx.launchd).map_err(|err| err.to_string());
-            (entry.clone(), snapshot)
+        .map(|entry| Observed {
+            entry: entry.clone(),
+            snapshot: observe(entry, &ctx.paths, ctx.launchd).map_err(|err| err.to_string()),
+            hooks: present_hooks(&entry.path),
         })
         .collect()
 }
@@ -96,20 +102,23 @@ fn remember(ctx: &Ctx, awake_since: SystemTime, observed: &[Observed]) -> PollOu
         result = Some((views, notices));
         next
     });
-    match (saved, result) {
-        (Ok((_, warning)), Some((repos, notices))) => PollOutcome {
-            repos,
-            notices,
-            warnings: warning.into_iter().collect(),
-        },
-        (saved, _) => {
+    match saved {
+        Ok((_, warning)) => {
+            // `update_or_reset` ran the closure before saving.
+            let (repos, notices) = result.unwrap_or_default();
+            PollOutcome {
+                repos,
+                notices,
+                warnings: warning.into_iter().collect(),
+            }
+        }
+        Err(err) => {
             let (_, repos, _) = evaluate(ctx, awake_since, observed, &State::default());
-            let reason = saved.err().map_or_else(String::new, |err| err.to_string());
             PollOutcome {
                 repos,
                 notices: Vec::new(),
                 warnings: vec![format!(
-                    "cannot save the state, notifications held back: {reason}"
+                    "cannot save the state, notifications held back: {err}"
                 )],
             }
         }
@@ -125,9 +134,13 @@ fn evaluate(
 ) -> (State, Vec<RepoView>, Vec<(RepoId, Notice)>) {
     let results: Vec<_> = observed
         .iter()
-        .map(|(entry, snapshot)| {
-            let memory = state.repos.get(&entry.id).cloned().unwrap_or_default();
-            view(ctx, awake_since, entry, snapshot, &memory)
+        .map(|observed| {
+            let memory = state
+                .repos
+                .get(&observed.entry.id)
+                .cloned()
+                .unwrap_or_default();
+            view(ctx, awake_since, observed, &memory)
         })
         .collect();
     let repos = results
@@ -150,10 +163,10 @@ fn evaluate(
 fn view(
     ctx: &Ctx,
     awake_since: SystemTime,
-    entry: &RepoEntry,
-    snapshot: &Result<RepoSnapshot, String>,
+    observed: &Observed,
     memory: &RepoMemory,
 ) -> (RepoView, RepoMemory, Option<Notice>) {
+    let snapshot = &observed.snapshot;
     let (health, status) = match snapshot {
         Ok(snapshot) => {
             let health = classify(&snapshot.observation(ctx.now, awake_since, memory));
@@ -167,11 +180,11 @@ fn view(
     };
     let (next, notice) = advance(memory, &health, status);
     let view = RepoView {
-        entry: entry.clone(),
+        entry: observed.entry.clone(),
         health,
         snapshot: snapshot.as_ref().ok().cloned(),
         error: snapshot.as_ref().err().cloned(),
-        hooks: present_hooks(&entry.path),
+        hooks: observed.hooks.clone(),
     };
     (view, next, notice)
 }

@@ -1,21 +1,19 @@
 //! The menu as plain data, built from one poll: the shell only renders it.
 
 use std::collections::BTreeSet;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use super::Authorization;
 use super::actions::Action;
 use super::poll::{PollOutcome, RepoView};
+use crate::commands::status::{failures, last_success};
 use crate::health::{Color, Row};
 use crate::paths::RepoId;
 use crate::registry::AppSettings;
-use crate::status::{StatusFile, StatusRead};
+use crate::status::StatusRead;
 
 const NOTIFICATIONS_OFF: &str = "Notifications are off — alerts cannot reach you";
 const MESSAGE_CHARS: usize = 80;
-const SECS_PER_MINUTE: u64 = 60;
-const SECS_PER_HOUR: u64 = 3600;
-const SECS_PER_DAY: u64 = 86_400;
 
 /// One menu entry. Labels are shown disabled.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -160,21 +158,6 @@ fn status_details(status: &StatusRead, now: SystemTime) -> Vec<String> {
     .collect()
 }
 
-fn last_success(status: &StatusFile, now: SystemTime) -> String {
-    match status.last_success_at {
-        Some(at) => format!("last success {} ago", ago(now, at)),
-        None => "no success yet".to_owned(),
-    }
-}
-
-fn failures(count: u32) -> Option<String> {
-    match count {
-        0 => None,
-        1 => Some("1 failure in a row".to_owned()),
-        n => Some(format!("{n} failures in a row")),
-    }
-}
-
 /// The first line, cut to [`MESSAGE_CHARS`] characters (an ellipsis marks
 /// the cut).
 fn shorten(text: &str) -> String {
@@ -184,18 +167,6 @@ fn shorten(text: &str) -> String {
     }
     let kept: String = line.chars().take(MESSAGE_CHARS - 1).collect();
     format!("{kept}…")
-}
-
-/// `now - then` in the largest whole unit (s, min, h, d); a future `then`
-/// reads as 0 s.
-fn ago(now: SystemTime, then: SystemTime) -> String {
-    let secs = now.duration_since(then).unwrap_or(Duration::ZERO).as_secs();
-    match secs {
-        s if s < SECS_PER_MINUTE => format!("{s} s"),
-        s if s < SECS_PER_HOUR => format!("{} min", s / SECS_PER_MINUTE),
-        s if s < SECS_PER_DAY => format!("{} h", s / SECS_PER_HOUR),
-        s => format!("{} d", s / SECS_PER_DAY),
-    }
 }
 
 fn actions(view: &RepoView, app: &AppSettings, busy: bool) -> Vec<Item> {

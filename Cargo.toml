@@ -25,6 +25,6 @@ git-rsrs = { git = "https://github.com/nicecab/git-rsrs", rev = "73ab676d50a8356
 block2 = "0.6"
 dispatch2 = "0.3"
 objc2 = "0.6"
-objc2-app-kit = "0.3"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "objc2-core-foundation", "NSAlert", "NSApplication", "NSButton", "NSColor", "NSControl", "NSImage", "NSMenu", "NSMenuItem", "NSResponder", "NSRunningApplication", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSView"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSBundle", "NSDictionary", "NSError", "NSString"] }
 objc2-user-notifications = { version = "0.3", default-features = false, features = ["std", "bitflags", "block2", "UNNotification", "UNNotificationContent", "UNNotificationRequest", "UNNotificationResponse", "UNNotificationSettings", "UNNotificationTrigger", "UNUserNotificationCenter"] }

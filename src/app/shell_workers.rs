@@ -22,7 +22,7 @@ use crate::system::awake_since;
 /// wakes the poller so the menu shows the result.
 pub(super) fn run_action(config: &Config, app: &AppSettings, action: &Action, wake: &Sender<()>) {
     let launchd = Launchctl::current();
-    let id = action_repo(action);
+    let id = action.repo().clone();
     match perform(&config.ctx(&launchd), app, action) {
         Ok(Some(notice)) => post_notice(&id, &notice),
         Ok(None) => {}
@@ -37,19 +37,6 @@ pub(super) fn run_action(config: &Config, app: &AppSettings, action: &Action, wa
         send(Event::Synced(id));
     }
     let _ = wake.send(());
-}
-
-fn action_repo(action: &Action) -> RepoId {
-    match action {
-        Action::SyncNow(id)
-        | Action::OpenLog(id)
-        | Action::OpenTerminal(id)
-        | Action::OpenEditor(id)
-        | Action::Restart(id)
-        | Action::Pause(id)
-        | Action::Resume(id)
-        | Action::AllowHooks(id) => id.clone(),
-    }
 }
 
 /// The notifier thread's queue; set once by [`spawn_notifier`].

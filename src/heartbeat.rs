@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::app::Authorization;
 use crate::atomic::{read_optional, write_atomic};
+use crate::health::elapsed;
 
 /// How often the app polls.
 pub const POLL_INTERVAL: Duration = Duration::from_secs(30);
@@ -50,6 +51,11 @@ impl Heartbeat {
             pid: file.pid,
             notifications: file.notifications,
         })
+    }
+
+    /// At most [`STALE_AFTER`] old at `now` (a future time counts as fresh).
+    pub fn is_fresh(&self, now: SystemTime) -> bool {
+        elapsed(self.at, now) <= STALE_AFTER
     }
 
     /// Writes the heartbeat atomically.
@@ -142,22 +148,29 @@ impl WatchState {
 
     /// The same state with `kind` recorded as alerted at `now`.
     fn with_alerted(&self, kind: AlertKind, now: SystemTime) -> WatchState {
-        let alerted = self.alerted.iter().map(|(k, at)| (*k, *at));
-        WatchState {
-            alerted: alerted.chain([(kind, now)]).collect(),
-            ..self.clone()
-        }
+        self.with_alert_record(kind, Some(now))
     }
 
     /// The same state without an alert record for `kind`.
     fn without_alerted(&self, kind: AlertKind) -> WatchState {
+        self.with_alert_record(kind, None)
+    }
+
+    /// The same state with `kind`'s alert record taken from `previous`: an
+    /// alert that could not be delivered must not count as sent.
+    pub fn with_alert_record_of(&self, previous: &WatchState, kind: AlertKind) -> WatchState {
+        self.with_alert_record(kind, previous.alerted.get(&kind).copied())
+    }
+
+    /// A copy whose record for `kind` is `at` (`None`: no record).
+    fn with_alert_record(&self, kind: AlertKind, at: Option<SystemTime>) -> WatchState {
+        let mut alerted = self.alerted.clone();
+        match at {
+            Some(at) => alerted.insert(kind, at),
+            None => alerted.remove(&kind),
+        };
         WatchState {
-            alerted: self
-                .alerted
-                .iter()
-                .filter(|(k, _)| **k != kind)
-                .map(|(k, at)| (*k, *at))
-                .collect(),
+            alerted,
             ..self.clone()
         }
     }
@@ -197,7 +210,7 @@ pub fn decide(
     if elapsed(awake_since, now) < STALE_AFTER {
         return (vec![Action::Nothing], state.clone());
     }
-    match heartbeat.filter(|beat| elapsed(beat.at, now) <= STALE_AFTER) {
+    match heartbeat.filter(|beat| beat.is_fresh(now)) {
         Some(beat) => fresh(now, beat.notifications, state),
         None => stale(now, app_loaded, state),
     }
@@ -253,9 +266,4 @@ fn write_json(path: &Path, value: &impl Serialize) -> io::Result<()> {
 /// Full precision: the 90 s and 6 h boundaries must hold after a reload.
 fn rfc3339(time: SystemTime) -> String {
     humantime::format_rfc3339_nanos(time).to_string()
-}
-
-/// `now − since`, zero when `since` is in the future (clock skew).
-fn elapsed(since: SystemTime, now: SystemTime) -> Duration {
-    now.duration_since(since).unwrap_or(Duration::ZERO)
 }

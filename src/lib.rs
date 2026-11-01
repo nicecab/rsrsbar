@@ -22,7 +22,7 @@ mod trust;
 
 pub use app::Authorization;
 pub use atomic::write_atomic;
-pub use bundle::{BUNDLE_ID, bundle_root, info_plist};
+pub use bundle::{bundle_root, info_plist};
 pub use child::output_within;
 pub use episode::{EpisodeKey, Notice, RecoveryPoint, RepoMemory, State, StateError, advance};
 pub use git::{GitError, RepoProbe, current_branch, probe};

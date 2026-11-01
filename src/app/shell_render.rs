@@ -13,7 +13,20 @@ use super::menu::{IconState, Item};
 use crate::health::Color;
 
 /// Bits of a menu item tag below the render generation: the action index.
-pub(super) const TAG_INDEX_BITS: u32 = 20;
+const TAG_INDEX_BITS: u32 = 20;
+/// Render generations wrap here, keeping tags well inside `NSInteger`.
+pub(super) const GENERATIONS: isize = 1 << 20;
+
+/// A menu item tag: the render `generation` above the action `index`.
+fn tag(generation: isize, index: usize) -> isize {
+    (generation << TAG_INDEX_BITS) | isize::try_from(index).unwrap_or(0)
+}
+
+/// The (generation, action index) a menu item tag was made from.
+pub(super) fn untag(tag: isize) -> (isize, usize) {
+    let index = usize::try_from(tag & ((1 << TAG_INDEX_BITS) - 1)).unwrap_or(usize::MAX);
+    (tag >> TAG_INDEX_BITS, index)
+}
 
 /// `NSMenu` for `items`; every action item's tag is `generation` above the
 /// index of its action, appended to `actions`.
@@ -36,9 +49,8 @@ pub(super) fn ns_menu(
                 enabled,
             } => {
                 let entry = titled(title, *enabled, mtm);
-                let index = isize::try_from(actions.len()).unwrap_or(0);
+                entry.setTag(tag(generation, actions.len()));
                 actions.push(action.clone());
-                entry.setTag((generation << TAG_INDEX_BITS) | index);
                 // SAFETY: `target` implements `menuAction:` and outlives
                 // the menu (it lives for the whole process).
                 unsafe {
@@ -81,16 +93,11 @@ fn dot(color: Color) -> &'static str {
 /// Normal symbol when all is well; a red warning triangle with the count
 /// when anything is red; a crossed-out bell / "!" when notifications are off.
 pub(super) fn render_icon(button: &NSStatusBarButton, icon: IconState) {
-    let (symbol, red) = match (icon.red, icon.warning) {
-        (0, false) => ("arrow.triangle.2.circlepath", false),
-        (0, true) => ("bell.slash", false),
-        _ => ("exclamationmark.triangle.fill", true),
-    };
-    let title = match (icon.red, icon.warning) {
-        (0, false) => String::new(),
-        (0, true) => "!".to_owned(),
-        (n, false) => n.to_string(),
-        (n, true) => format!("{n} !"),
+    let (symbol, red, title) = match (icon.red, icon.warning) {
+        (0, false) => ("arrow.triangle.2.circlepath", false, String::new()),
+        (0, true) => ("bell.slash", false, "!".to_owned()),
+        (n, false) => ("exclamationmark.triangle.fill", true, n.to_string()),
+        (n, true) => ("exclamationmark.triangle.fill", true, format!("{n} !")),
     };
     let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
         &NSString::from_str(symbol),

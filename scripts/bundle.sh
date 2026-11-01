@@ -11,6 +11,13 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 app="$root/target/rsrsbar.app"
 install_dir="$HOME/Applications"
 
+# Moves $1 to the Trash if anything is there, a dangling symlink included.
+discard() {
+  if [ -e "$1" ] || [ -L "$1" ]; then
+    trash "$1"
+  fi
+}
+
 install=false
 case "${1-}" in
   "") ;;
@@ -24,9 +31,7 @@ exe="$root/target/release/rsrsbar"
 
 # A stale bundle (or a dangling symlink in its place) is replaced, never
 # merged into.
-if [ -e "$app" ] || [ -L "$app" ]; then
-  trash "$app"
-fi
+discard "$app"
 mkdir -p "$app/Contents/MacOS"
 # The Info.plist comes from the very binary being bundled. It is run from
 # target/release: run from inside the half-built bundle, its write to
@@ -44,9 +49,7 @@ echo "built $app"
 
 if [ "$install" = true ]; then
   mkdir -p "$install_dir"
-  if [ -e "$install_dir/rsrsbar.app" ] || [ -L "$install_dir/rsrsbar.app" ]; then
-    trash "$install_dir/rsrsbar.app"
-  fi
+  discard "$install_dir/rsrsbar.app"
   # ditto keeps the signature's extended attributes intact.
   ditto "$app" "$install_dir/rsrsbar.app"
   codesign --verify --strict "$install_dir/rsrsbar.app"

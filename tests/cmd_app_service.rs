@@ -1,27 +1,13 @@
 mod common;
 
-use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-use common::Fixture;
+use common::{Fixture, plist_dict as dict, plist_string as string};
 use plist::Value;
 use rsrsbar::commands::{Ctx, start, stop};
 use rsrsbar::{Paths, Recording, app_plist, heartbeat_plist};
 
 const BUNDLE: &str = "/Users/t/Applications/rsrsbar.app";
-
-fn dict(bytes: &[u8]) -> plist::Dictionary {
-    Value::from_reader(Cursor::new(bytes))
-        .expect("parse plist")
-        .into_dictionary()
-        .expect("dictionary")
-}
-
-fn string<'a>(dict: &'a plist::Dictionary, key: &str) -> &'a str {
-    dict.get(key)
-        .and_then(Value::as_string)
-        .unwrap_or_else(|| panic!("{key} is a string"))
-}
 
 fn arguments(dict: &plist::Dictionary) -> Vec<&str> {
     dict.get("ProgramArguments")

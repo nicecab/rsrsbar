@@ -221,3 +221,26 @@ pub fn running(ids: &[&rsrsbar::RepoId]) -> rsrsbar::Recording {
             launchd.with_loaded(&rsrsbar::watch_label(repo_id), Some(std::process::id()))
         })
 }
+
+/// Parses plist bytes into its top-level dictionary.
+pub fn plist_dict(bytes: &[u8]) -> plist::Dictionary {
+    plist::Value::from_reader(std::io::Cursor::new(bytes))
+        .expect("parse plist")
+        .into_dictionary()
+        .expect("dictionary")
+}
+
+/// The string at `key`; panics when it is missing or not a string.
+pub fn plist_string<'a>(dict: &'a plist::Dictionary, key: &str) -> &'a str {
+    dict.get(key)
+        .and_then(plist::Value::as_string)
+        .unwrap_or_else(|| panic!("{key} is a string"))
+}
+
+/// Registers a fresh checkout `<root>/<name>` (with an origin) through
+/// `add`, launchd recorded and discarded.
+pub fn add_repo(fx: &Fixture, name: &str) -> rsrsbar::RepoId {
+    let launchd = rsrsbar::Recording::new();
+    rsrsbar::commands::add(&fx.ctx(&launchd), add_args(&fx.repo(name, true))).expect("add");
+    id(name)
+}

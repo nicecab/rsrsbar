@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::child::{DEADLINE, output_within};
-use crate::commands::{self, CommandError, Ctx};
+use crate::commands::{self, CommandError, Ctx, io_error};
 use crate::episode::Notice;
 use crate::paths::RepoId;
 use crate::registry::{AppSettings, RepoEntry};
@@ -24,6 +24,22 @@ pub enum Action {
     Pause(RepoId),
     Resume(RepoId),
     AllowHooks(RepoId),
+}
+
+impl Action {
+    /// The repository the action is about.
+    pub fn repo(&self) -> &RepoId {
+        match self {
+            Action::SyncNow(id)
+            | Action::OpenLog(id)
+            | Action::OpenTerminal(id)
+            | Action::OpenEditor(id)
+            | Action::Restart(id)
+            | Action::Pause(id)
+            | Action::Resume(id)
+            | Action::AllowHooks(id) => id,
+        }
+    }
 }
 
 /// Performs `action`. A sync that fails or runs past its deadline is not an
@@ -79,10 +95,7 @@ fn entry(ctx: &Ctx, id: &RepoId) -> Result<RepoEntry, CommandError> {
 fn open(app: &str, path: &Path) -> Result<Option<Notice>, CommandError> {
     let mut command = Command::new(OPEN);
     command.arg("-a").arg(app).arg(path);
-    let output = output_within(&mut command, DEADLINE).map_err(|source| CommandError::Io {
-        path: Path::new(OPEN).to_path_buf(),
-        source,
-    })?;
+    let output = output_within(&mut command, DEADLINE).map_err(io_error(Path::new(OPEN)))?;
     if output.status.success() {
         return Ok(None);
     }

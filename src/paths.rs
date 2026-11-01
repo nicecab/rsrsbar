@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 const MAX_ID_LEN: usize = 63;
 const LABEL_PREFIX: &str = "com.nicecab.rsrsbar.watch.";
 /// The launchd label of the menu bar app's job.
-pub const APP_LABEL: &str = "com.nicecab.rsrsbar";
+pub const APP_LABEL: &str = crate::bundle::BUNDLE_ID;
 /// The launchd label of the independent `check-heartbeat` job.
 pub const HEARTBEAT_LABEL: &str = "com.nicecab.rsrsbar.heartbeat";
 

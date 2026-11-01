@@ -7,7 +7,7 @@ use super::{CommandError, Ctx, Report, hooks_text};
 use crate::app::Authorization;
 use crate::episode::{RepoMemory, State};
 use crate::health::{Color, Health, classify};
-use crate::heartbeat::{Heartbeat, STALE_AFTER};
+use crate::heartbeat::Heartbeat;
 use crate::observe::{ObserveError, observe};
 use crate::paths::HEARTBEAT_LABEL;
 use crate::registry::{Registry, RepoEntry};
@@ -154,14 +154,14 @@ fn summary(status: &StatusRead, now: SystemTime) -> String {
     .join(" · ")
 }
 
-fn last_success(status: &StatusFile, now: SystemTime) -> String {
+pub(crate) fn last_success(status: &StatusFile, now: SystemTime) -> String {
     match status.last_success_at {
         Some(at) => format!("last success {} ago", ago(now, at)),
         None => "no success yet".to_owned(),
     }
 }
 
-fn failures(count: u32) -> Option<String> {
+pub(crate) fn failures(count: u32) -> Option<String> {
     match count {
         0 => None,
         1 => Some("1 failure in a row".to_owned()),
@@ -171,7 +171,7 @@ fn failures(count: u32) -> Option<String> {
 
 /// `now - then` in the largest whole unit (s, min, h, d); a future `then`
 /// reads as 0 s.
-fn ago(now: SystemTime, then: SystemTime) -> String {
+pub(crate) fn ago(now: SystemTime, then: SystemTime) -> String {
     let secs = now.duration_since(then).unwrap_or(Duration::ZERO).as_secs();
     match secs {
         s if s < SECS_PER_MINUTE => format!("{s} s"),
@@ -224,17 +224,13 @@ fn read_focus_file(path: &std::path::Path) -> Option<String> {
     Some(text)
 }
 
-/// From a fresh heartbeat (at most `STALE_AFTER` old); otherwise unknown,
+/// From a fresh heartbeat ([`Heartbeat::is_fresh`]); otherwise unknown,
 /// saying why.
 fn notifications_text(ctx: &Ctx) -> String {
     let Some(heartbeat) = Heartbeat::load(&ctx.paths.heartbeat()) else {
         return "unknown (menu bar app not running)".to_owned();
     };
-    let age = ctx
-        .now
-        .duration_since(heartbeat.at)
-        .unwrap_or(Duration::ZERO);
-    if age > STALE_AFTER {
+    if !heartbeat.is_fresh(ctx.now) {
         return format!("unknown (no heartbeat for {})", ago(ctx.now, heartbeat.at));
     }
     match heartbeat.notifications {

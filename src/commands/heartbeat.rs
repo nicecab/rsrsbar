@@ -1,11 +1,11 @@
 //! `rsrsbar check-heartbeat`: the independent job that restarts a stuck app
 //! and alerts through `osascript` when that does not help.
 
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::{CommandError, Ctx, Report};
+use super::{CommandError, Ctx, Report, io_error};
 use crate::child::{DEADLINE, output_within};
 use crate::heartbeat::{Action, AlertKind, Heartbeat, WatchState, decide};
 use crate::paths::APP_LABEL;
@@ -48,14 +48,14 @@ pub fn check_heartbeat(ctx: &Ctx, awake_since: Option<SystemTime>) -> Result<Rep
     let saved = results
         .iter()
         .fold(decided, |next, (action, result)| match (action, result) {
-            (Action::Alert(kind), Err(_)) => unrecorded(&next, &state, *kind),
+            (Action::Alert(kind), Err(_)) => next.with_alert_record_of(&state, *kind),
             _ => next,
         });
     let path = paths.heartbeat_state();
     let save = if saved == state {
         Ok(())
     } else {
-        saved.save(&path).map_err(super::io_error(&path))
+        saved.save(&path).map_err(io_error(&path))
     };
     let lines = results
         .into_iter()
@@ -70,16 +70,6 @@ pub fn check_heartbeat(ctx: &Ctx, awake_since: Option<SystemTime>) -> Result<Rep
         .chain(lines.into_iter().flatten())
         .collect();
     Ok(Report::ok(lines.join("\n")))
-}
-
-/// `next` with its record of `kind` put back to what `previous` had.
-fn unrecorded(next: &WatchState, previous: &WatchState, kind: AlertKind) -> WatchState {
-    let others = next.alerted.iter().filter(|(k, _)| **k != kind);
-    let before = previous.alerted.get_key_value(&kind);
-    WatchState {
-        alerted: others.chain(before).map(|(k, at)| (*k, *at)).collect(),
-        ..next.clone()
-    }
 }
 
 /// Performs one action; the line it reports, if any.
@@ -108,10 +98,7 @@ fn alert(kind: AlertKind) -> Result<(), CommandError> {
         command.arg("-e").arg(line);
     }
     command.arg("--").arg(kind.text());
-    let output = output_within(&mut command, DEADLINE).map_err(|source| CommandError::Io {
-        path: PathBuf::from(OSASCRIPT),
-        source,
-    })?;
+    let output = output_within(&mut command, DEADLINE).map_err(io_error(Path::new(OSASCRIPT)))?;
     if output.status.success() {
         return Ok(());
     }

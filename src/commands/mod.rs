@@ -24,7 +24,7 @@ mod lifecycle;
 mod preview;
 mod remove;
 mod run_hook;
-mod status;
+pub(crate) mod status;
 mod sync;
 
 pub use add::{AddArgs, add};

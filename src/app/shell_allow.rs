@@ -12,7 +12,7 @@ use super::shell::Config;
 use super::shell_workers::post_notice;
 use crate::atomic::write_atomic;
 use crate::child::{DEADLINE, output_within};
-use crate::commands::{self, CommandError};
+use crate::commands::{self, CommandError, io_error};
 use crate::episode::Notice;
 use crate::launchd::Launchctl;
 use crate::paths::RepoId;
@@ -28,7 +28,7 @@ pub(super) fn allow_hooks(config: &Config, id: &RepoId, mtm: MainThreadMarker) {
     let ctx = config.ctx(&launchd);
     let result = commands::allow_preview(&ctx, id.as_str()).and_then(|preview| {
         let diff = config.paths.repo_dir(id).join("pending-allow.diff");
-        write_atomic(&diff, preview.text.as_bytes()).map_err(commands_io(&diff))?;
+        write_atomic(&diff, preview.text.as_bytes()).map_err(io_error(&diff))?;
         open_in_text_edit(&diff)?;
         if confirmed(id, mtm) {
             commands::allow(&ctx, id.as_str(), &preview.digest).map(drop)
@@ -60,7 +60,7 @@ fn confirmed(id: &RepoId, mtm: MainThreadMarker) -> bool {
 fn open_in_text_edit(path: &Path) -> Result<(), CommandError> {
     let mut command = Command::new(OPEN);
     command.args(["-a", "TextEdit"]).arg(path);
-    let output = output_within(&mut command, DEADLINE).map_err(commands_io(Path::new(OPEN)))?;
+    let output = output_within(&mut command, DEADLINE).map_err(io_error(Path::new(OPEN)))?;
     if output.status.success() {
         return Ok(());
     }
@@ -69,11 +69,4 @@ fn open_in_text_edit(path: &Path) -> Result<(), CommandError> {
         path.display(),
         String::from_utf8_lossy(&output.stderr).trim()
     )))
-}
-
-fn commands_io(path: &Path) -> impl FnOnce(std::io::Error) -> CommandError + '_ {
-    move |source| CommandError::Io {
-        path: path.to_path_buf(),
-        source,
-    }
 }

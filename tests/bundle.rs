@@ -1,22 +1,12 @@
-use std::io::Cursor;
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use plist::Value;
 use rsrsbar::{bundle_root, info_plist};
 
-fn plist_dict(bytes: &[u8]) -> plist::Dictionary {
-    Value::from_reader(Cursor::new(bytes))
-        .expect("parse plist")
-        .into_dictionary()
-        .expect("dictionary")
-}
-
-fn string<'a>(dict: &'a plist::Dictionary, key: &str) -> &'a str {
-    dict.get(key)
-        .and_then(Value::as_string)
-        .unwrap_or_else(|| panic!("{key} is a string"))
-}
+use common::{plist_dict, plist_string as string};
 
 #[test]
 fn info_plist_keys() {
