@@ -1,26 +1,10 @@
+mod common;
+
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
+use common::git;
 use rsrsbar::{current_branch, probe};
-
-fn git(dir: &Path, args: &[&str]) {
-    let status = Command::new("git")
-        .args([
-            "-c",
-            "user.name=rsrsbar test",
-            "-c",
-            "user.email=test@example.invalid",
-            "-c",
-            "commit.gpgsign=false",
-        ])
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(status.status.success(), "git {args:?}: {status:?}");
-}
 
 /// A primary checkout on `main` with one commit and an `origin` remote.
 fn primary(root: &Path) -> PathBuf {
@@ -83,4 +67,21 @@ fn probe_detached_and_non_repo() {
     assert!(probe(&plain).is_err());
     assert_eq!(current_branch(&plain), None);
     assert!(probe(&tmp.path().join("missing")).is_err());
+}
+
+#[test]
+fn test_git_ignores_user_and_system_config() {
+    let outside = tempfile::tempdir().expect("tempdir");
+    let output = common::git_command()
+        .arg("-C")
+        .arg(outside.path())
+        .args(["config", "--show-origin", "--list"])
+        .output()
+        .expect("run git");
+    let text = String::from_utf8_lossy(&output.stdout);
+    let config_files: Vec<_> = text
+        .lines()
+        .filter(|line| line.starts_with("file:"))
+        .collect();
+    assert!(config_files.is_empty(), "{config_files:?}");
 }

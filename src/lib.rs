@@ -2,6 +2,7 @@
 //! autosync watchers on macOS.
 
 mod atomic;
+pub mod commands;
 mod episode;
 mod git;
 mod gitrsrs;

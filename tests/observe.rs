@@ -1,3 +1,5 @@
+mod common;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -133,12 +135,7 @@ fn observe_reads_the_branch_only_when_skipped() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let repo = tmp.path().join("repo");
     fs::create_dir_all(&repo).expect("mkdir");
-    let status = std::process::Command::new("git")
-        .args(["init", "-q", "-b", "feat"])
-        .arg(&repo)
-        .status()
-        .expect("git init");
-    assert!(status.success());
+    common::git(&repo, &["init", "-q", "-b", "feat"]);
     let paths = Paths::new(tmp.path().join("home"));
     let entry = entry(&repo, Some(hooks_digest(&repo).expect("digest")));
     write_status(&paths, &entry.id, RsrsOutcome::BranchSkipped);
