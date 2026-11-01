@@ -3,6 +3,8 @@
 
 mod atomic;
 mod episode;
+mod git;
+mod gitrsrs;
 mod health;
 mod launchd;
 mod paths;
@@ -14,6 +16,10 @@ mod trust;
 
 pub use atomic::write_atomic;
 pub use episode::{EpisodeKey, Notice, RecoveryPoint, RepoMemory, State, StateError, advance};
+pub use git::{GitError, RepoProbe, current_branch, probe};
+pub use gitrsrs::{
+    GitRsrsError, MIN_GIT_RSRS, SyncRun, check_version, parse_version, sync_deadline, sync_once,
+};
 pub use health::{
     Color, Health, JobState, Notify, Observation, Row, classify, failure_run, unhealthy_in_window,
 };
