@@ -17,6 +17,7 @@ fn args(path: &Path) -> AddArgs {
         remote: None,
         lock_name: None,
         interval: None,
+        allow_hooks: false,
     }
 }
 

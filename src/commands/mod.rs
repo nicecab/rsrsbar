@@ -15,15 +15,21 @@ use crate::registry::RegistryError;
 use crate::service::ServiceError;
 
 mod add;
+mod allow;
 mod install;
 mod lifecycle;
+mod preview;
 mod remove;
+mod run_hook;
 mod sync;
 
 pub use add::{AddArgs, add};
+pub use allow::allow;
 pub use install::{ServiceChange, install_service};
 pub use lifecycle::{pause, refresh, restart, resume};
+pub use preview::{Preview, allow_preview};
 pub use remove::remove;
+pub use run_hook::{RunHookError, run_hook};
 pub use sync::sync;
 
 /// Everything a command may touch, passed in explicitly.

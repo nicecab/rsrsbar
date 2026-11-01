@@ -122,6 +122,25 @@ pub fn present_hooks(repo: &Path) -> Vec<Phase> {
 /// absolute or resolves — lexically, following links inside the tree —
 /// outside `.autosync/`. Relative links within the tree are kept.
 pub fn snapshot_hooks(repo: &Path, dest: &Path) -> io::Result<String> {
+    let (staging, digest) = stage(repo, dest)?;
+    replace_dir(staging, dest)?;
+    Ok(digest)
+}
+
+/// [`snapshot_hooks`], but the staged copy replaces `dest` only if its
+/// digest is `expected`; otherwise `dest` is left untouched and the result
+/// is `Ok(false)`. Binds an allow to the content a preview showed.
+pub fn snapshot_hooks_matching(repo: &Path, dest: &Path, expected: &str) -> io::Result<bool> {
+    let (staging, digest) = stage(repo, dest)?;
+    if digest != expected {
+        return Ok(false);
+    }
+    replace_dir(staging, dest)?;
+    Ok(true)
+}
+
+/// Copies `.autosync/` into a temporary sibling of `dest` and digests it.
+fn stage(repo: &Path, dest: &Path) -> io::Result<(TempDir, String)> {
     let root = repo.join(AUTOSYNC_DIR);
     let parent = match dest.parent() {
         Some(p) if !p.as_os_str().is_empty() => p,
@@ -138,8 +157,24 @@ pub fn snapshot_hooks(repo: &Path, dest: &Path) -> io::Result<String> {
         Ok(_) => return Err(not_copyable(&root, "is not a directory")),
     }
     let digest = hash(sorted(collect(staging.path(), Path::new(""))?));
-    replace_dir(staging, dest)?;
-    Ok(digest)
+    Ok((staging, digest))
+}
+
+/// [`hooks_digest`] of a snapshot made by [`snapshot_hooks`], laid out as
+/// `.autosync/`: what `run-hook` compares with the allowed digest before it
+/// executes anything from the snapshot. A missing snapshot has the empty
+/// digest (the same as a missing `.autosync/`); anything but a real
+/// directory at `dest` is an error.
+pub fn snapshot_digest(dest: &Path) -> io::Result<String> {
+    match fs::symlink_metadata(dest) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(hash(Vec::new())),
+        Err(e) => Err(e),
+        Ok(meta) if meta.is_dir() => Ok(hash(sorted(collect(dest, Path::new(""))?))),
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("{} is not a directory", dest.display()),
+        )),
+    }
 }
 
 fn not_copyable(path: &Path, why: &str) -> io::Error {

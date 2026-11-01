@@ -23,6 +23,7 @@ fn add_repo(fx: &Fixture, ctx: &Ctx, name: &str) -> RepoId {
         remote: None,
         lock_name: None,
         interval: None,
+        allow_hooks: false,
     };
     add(ctx, args).expect("add");
     id(name)

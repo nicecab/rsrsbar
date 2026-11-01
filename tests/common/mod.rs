@@ -155,3 +155,17 @@ fn collect_files(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) {
         }
     }
 }
+
+/// The built `rsrsbar` binary with `HOME` set to the fixture's home and the
+/// same git isolation as [`git_command`]. Only commands that never reach
+/// launchctl (`run-hook`, `allow`) may be run this way.
+pub fn rsrsbar(fx: &Fixture) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_rsrsbar"));
+    command
+        .env("HOME", &fx.paths.home)
+        .env("XDG_CONFIG_HOME", git_home())
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .stdin(std::process::Stdio::null());
+    command
+}

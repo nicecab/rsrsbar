@@ -4,6 +4,9 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+use tempfile::TempDir;
+
+use super::allow::snapshot;
 use super::{CommandError, Ctx, Report, install_service, lock_services, remove_file};
 use crate::git::{RepoProbe, probe};
 use crate::gitrsrs::check_version;
@@ -13,6 +16,7 @@ use crate::trust::{hooks_digest, present_hooks};
 
 const AUTOSYNC_DIR: &str = ".autosync";
 const DEFAULT_REMOTE: &str = "origin";
+const RETAINED: &str = "allowed-hooks";
 
 /// `rsrsbar add <PATH> [--id] [--branch] [--remote] [--lock-name] [--interval]`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,6 +29,8 @@ pub struct AddArgs {
     pub remote: Option<String>,
     pub lock_name: Option<String>,
     pub interval: Option<String>,
+    /// Allow the current `.autosync/` at once (no prompt), as `allow` would.
+    pub allow_hooks: bool,
 }
 
 /// Probes and refuses, then writes the service files, bootstraps the job and
@@ -60,7 +66,7 @@ pub fn add(ctx: &Ctx, args: AddArgs) -> Result<Report, CommandError> {
     // `Registry::update` checks again under its own lock.
     Registry::load(&ctx.paths.registry())?.with_added(entry.clone())?;
     refuse_loaded_label(ctx, &entry.id)?;
-    start_and_register(ctx, &entry)?;
+    let entry = start_with_hooks(ctx, entry, args.allow_hooks)?;
     Ok(Report::ok(added_text(ctx, &entry)))
 }
 
@@ -126,6 +132,54 @@ fn refuse_loaded_label(ctx: &Ctx, id: &RepoId) -> Result<(), CommandError> {
         )));
     }
     Ok(())
+}
+
+/// `--allow-hooks` snapshots `.autosync/` and records its digest before
+/// bootstrap, so the first sync already runs trusted hooks. A snapshot
+/// retained by an earlier `remove` is moved aside first and put back if the
+/// add fails (dropped on success), so a failed add leaves the support
+/// directory as it found it. Returns the entry as registered.
+fn start_with_hooks(
+    ctx: &Ctx,
+    entry: RepoEntry,
+    allow_hooks: bool,
+) -> Result<RepoEntry, CommandError> {
+    if !allow_hooks || entry.allowed_hooks.is_some() {
+        start_and_register(ctx, &entry)?;
+        return Ok(entry);
+    }
+    let dest = ctx.paths.allowed_hooks_dir(&entry.id);
+    let retained = set_aside(&dest)?;
+    let started = snapshot(ctx, &entry).and_then(|digest| {
+        let trusted = RepoEntry {
+            allowed_hooks: Some(digest),
+            ..entry.clone()
+        };
+        start_and_register(ctx, &trusted).map(|()| trusted)
+    });
+    if started.is_err() {
+        // Best effort: the original error is what the user needs to see.
+        let _ = fs::remove_dir_all(&dest);
+        if let Some(holder) = &retained {
+            let _ = fs::rename(holder.path().join(RETAINED), &dest);
+        }
+        drop(retained);
+        let _ = fs::remove_dir(ctx.paths.repo_dir(&entry.id));
+    }
+    started
+}
+
+/// Moves an existing snapshot at `dest` into a temporary sibling holder.
+fn set_aside(dest: &Path) -> Result<Option<TempDir>, CommandError> {
+    let Some(parent) = dest.parent().filter(|_| fs::symlink_metadata(dest).is_ok()) else {
+        return Ok(None);
+    };
+    let holder = tempfile::Builder::new()
+        .prefix(".retained-")
+        .tempdir_in(parent)
+        .map_err(super::io_error(parent))?;
+    fs::rename(dest, holder.path().join(RETAINED)).map_err(super::io_error(dest))?;
+    Ok(Some(holder))
 }
 
 /// Install → bootstrap → register, undoing the earlier steps on failure.

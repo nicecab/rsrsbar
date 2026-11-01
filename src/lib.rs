@@ -34,4 +34,6 @@ pub use status::{
     AttemptHealth, HookFailure, Outcome, RecentAttempt, StatusFile, StatusRead, read_status,
 };
 pub use system::{awake_since, parse_etime, parse_kern_time, process_age};
-pub use trust::{Phase, hooks_digest, present_hooks, snapshot_hooks};
+pub use trust::{
+    Phase, hooks_digest, present_hooks, snapshot_digest, snapshot_hooks, snapshot_hooks_matching,
+};
