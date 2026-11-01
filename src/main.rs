@@ -20,13 +20,20 @@ struct Cli {
     command: Command,
 }
 
-/// `run-hook` needs nothing but `$HOME`; every other command runs with a
-/// full [`Ctx`].
+/// `run-hook` needs nothing but `$HOME` and the bundle helpers need nothing
+/// at all; every other command runs with a full [`Ctx`].
 #[derive(Subcommand)]
 enum Command {
     /// Run one allowed hook phase; called by the generated git-rsrs config.
     #[command(hide = true)]
     RunHook { id: String, phase: String },
+    /// Print the app bundle's Info.plist; used by scripts/bundle.sh.
+    #[command(hide = true)]
+    InfoPlist,
+    /// Request notification permission and post TEXT; a bundle smoke test.
+    #[cfg(target_os = "macos")]
+    #[command(hide = true)]
+    NotifyTest { text: String },
     #[command(flatten)]
     Managed(Managed),
 }
@@ -81,6 +88,9 @@ enum Managed {
 fn main() -> ExitCode {
     let command = match Cli::parse().command {
         Command::RunHook { id, phase } => return run_hook(&id, &phase),
+        Command::InfoPlist => return info_plist(),
+        #[cfg(target_os = "macos")]
+        Command::NotifyTest { text } => return notify_test(&text),
         Command::Managed(command) => command,
     };
     match run(command) {
@@ -109,6 +119,38 @@ fn run_hook(id: &str, phase: &str) -> ExitCode {
             eprintln!("{}", one_line(&message));
             ExitCode::from(FAILURE)
         }
+    }
+}
+
+fn info_plist() -> ExitCode {
+    let plist = rsrsbar::info_plist(env!("CARGO_PKG_VERSION"));
+    match io::stdout().lock().write_all(&plist) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("rsrsbar: {err}");
+            ExitCode::from(FAILURE)
+        }
+    }
+}
+
+/// Prints `authorization: <state>`, then `posted` or `post failed: <why>`;
+/// exits 0 only when authorized and posted.
+#[cfg(target_os = "macos")]
+fn notify_test(text: &str) -> ExitCode {
+    use rsrsbar::Authorization;
+    use rsrsbar::app::notify;
+
+    let authorization = notify::request_authorization();
+    println!("authorization: {}", authorization.as_str());
+    let posted = notify::post("notify-test", "rsrsbar · notify-test", text);
+    match &posted {
+        Ok(()) => println!("posted"),
+        Err(err) => println!("post failed: {err}"),
+    }
+    if authorization == Authorization::Authorized && posted.is_ok() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(FAILURE)
     }
 }
 

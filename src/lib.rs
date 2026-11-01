@@ -1,7 +1,9 @@
 //! rsrsbar core library: pure building blocks for managing git-rsrs
 //! autosync watchers on macOS.
 
+pub mod app;
 mod atomic;
+mod bundle;
 pub mod commands;
 mod episode;
 mod git;
@@ -16,7 +18,9 @@ mod status;
 mod system;
 mod trust;
 
+pub use app::Authorization;
 pub use atomic::write_atomic;
+pub use bundle::{BUNDLE_ID, bundle_root, info_plist};
 pub use episode::{EpisodeKey, Notice, RecoveryPoint, RepoMemory, State, StateError, advance};
 pub use git::{GitError, RepoProbe, current_branch, probe};
 pub use gitrsrs::{
