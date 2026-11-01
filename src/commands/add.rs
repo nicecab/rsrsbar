@@ -56,6 +56,9 @@ pub fn add(ctx: &Ctx, args: AddArgs) -> Result<Report, CommandError> {
         git_timeout: None,
         lock_timeout: None,
         stall_threshold: None,
+        paused_limit: None,
+        offline_limit: None,
+        other_branch_limit: None,
         paused_at: None,
         allowed_hooks: initial_allowed_hooks(&found.toplevel)?,
     };

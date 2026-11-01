@@ -1,9 +1,10 @@
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
 use rsrsbar::{
     Color, Health, HookFailure, JobState, Notify, Observation, Outcome, RecentAttempt,
-    RecoveryPoint, RepoMemory, Row, Settings, StatusFile, StatusRead, classify, failure_run,
-    unhealthy_in_window,
+    RecoveryPoint, RepoEntry, RepoId, RepoMemory, Row, Settings, StatusFile, StatusRead, classify,
+    failure_run, unhealthy_in_window,
 };
 
 const MIN: Duration = Duration::from_secs(60);
@@ -23,6 +24,9 @@ fn settings() -> Settings {
         lock_timeout: 30 * SEC,
         lock_name: None,
         stall_threshold: 30 * MIN,
+        paused_limit: DAY,
+        offline_limit: 2 * HOUR,
+        other_branch_limit: DAY,
     }
 }
 
@@ -726,4 +730,181 @@ fn wake_grace_defers_time_rows() {
         ..Fixture::new()
     };
     assert_ne!(branch.classify().row, Row::OtherBranchLong);
+}
+
+/// A registry entry with every override left at its default.
+fn plain_entry() -> RepoEntry {
+    RepoEntry {
+        id: RepoId::new("obaidoc").expect("valid id"),
+        path: PathBuf::from("/x/obaidoc"),
+        branch: "main".to_owned(),
+        remote: "origin".to_owned(),
+        lock_name: None,
+        interval: None,
+        quiet_period: None,
+        git_timeout: None,
+        lock_timeout: None,
+        stall_threshold: None,
+        paused_limit: None,
+        offline_limit: None,
+        other_branch_limit: None,
+        paused_at: None,
+        allowed_hooks: None,
+    }
+}
+
+/// The paused, offline and other-branch rows for `settings`, each observed
+/// `over` past its limit.
+fn long_rows(settings: &Settings, over: Duration) -> [Health; 3] {
+    let with = |paused_at, status| Fixture {
+        settings: settings.clone(),
+        paused_at,
+        status,
+        ..Fixture::new()
+    };
+    [
+        with(
+            Some(now() - settings.paused_limit - over),
+            with_outcome(Outcome::Noop),
+        ),
+        with(
+            None,
+            succeeded_ago(Outcome::Offline, settings.offline_limit + over),
+        ),
+        with(
+            None,
+            succeeded_ago(Outcome::BranchSkipped, settings.other_branch_limit + over),
+        ),
+    ]
+    .map(|f| f.classify())
+}
+
+#[test]
+fn long_limit_defaults() {
+    let defaults = plain_entry().settings().expect("defaults parse");
+    assert_eq!(defaults.paused_limit, DAY);
+    assert_eq!(defaults.offline_limit, 2 * HOUR);
+    assert_eq!(defaults.other_branch_limit, DAY);
+
+    let [paused, offline, branch] = long_rows(&defaults, SEC);
+    assert_health(
+        &paused,
+        Row::PausedLong,
+        Color::Yellow,
+        Notify::Once,
+        Some("paused for over 24 h"),
+    );
+    assert_health(
+        &offline,
+        Row::OfflineLong,
+        Color::Red,
+        Notify::Yes,
+        Some("offline for over 2 h"),
+    );
+    assert_health(
+        &branch,
+        Row::OtherBranchLong,
+        Color::Yellow,
+        Notify::Once,
+        Some("on main, no sync for over 24 h"),
+    );
+
+    let [paused, offline, branch] = long_rows(&defaults, Duration::ZERO);
+    assert_eq!(
+        [paused.row, offline.row, branch.row],
+        [Row::Paused, Row::Offline, Row::OtherBranch]
+    );
+}
+
+#[test]
+fn long_limit_overrides() {
+    let entry = RepoEntry {
+        paused_limit: Some("5m".to_owned()),
+        offline_limit: Some("10m".to_owned()),
+        other_branch_limit: Some("90m".to_owned()),
+        ..plain_entry()
+    };
+    let settings = entry.settings().expect("overrides parse");
+    assert_eq!(settings.paused_limit, 5 * MIN);
+    assert_eq!(settings.offline_limit, 10 * MIN);
+    assert_eq!(settings.other_branch_limit, 90 * MIN);
+
+    let [paused, offline, branch] = long_rows(&settings, SEC);
+    assert_health(
+        &paused,
+        Row::PausedLong,
+        Color::Yellow,
+        Notify::Once,
+        Some("paused for over 5 min"),
+    );
+    assert_health(
+        &offline,
+        Row::OfflineLong,
+        Color::Red,
+        Notify::Yes,
+        Some("offline for over 10 min"),
+    );
+    assert_health(
+        &branch,
+        Row::OtherBranchLong,
+        Color::Yellow,
+        Notify::Once,
+        Some("on main, no sync for over 90 min"),
+    );
+
+    let [paused, offline, branch] = long_rows(&settings, Duration::ZERO);
+    assert_eq!(
+        [paused.row, offline.row, branch.row],
+        [Row::Paused, Row::Offline, Row::OtherBranch]
+    );
+
+    let bad = RepoEntry {
+        offline_limit: Some("soon".to_owned()),
+        ..plain_entry()
+    };
+    let err = bad.settings().expect_err("bad limit must fail");
+    assert!(err.to_string().contains("offline_limit"), "{err}");
+
+    // Zero, and anything finer than whole seconds, is refused: a label
+    // could not name it exactly.
+    for value in ["0s", "1500ms", "1m 1ns"] {
+        let entries = [
+            (
+                "paused_limit",
+                RepoEntry {
+                    paused_limit: Some(value.to_owned()),
+                    ..plain_entry()
+                },
+            ),
+            (
+                "offline_limit",
+                RepoEntry {
+                    offline_limit: Some(value.to_owned()),
+                    ..plain_entry()
+                },
+            ),
+            (
+                "other_branch_limit",
+                RepoEntry {
+                    other_branch_limit: Some(value.to_owned()),
+                    ..plain_entry()
+                },
+            ),
+        ];
+        for (key, entry) in entries {
+            let err = entry.settings().expect_err("limit must be refused");
+            let text = err.to_string();
+            assert!(
+                text.contains("obaidoc") && text.contains(key),
+                "{value}: {text}"
+            );
+        }
+    }
+    let ninety_s = RepoEntry {
+        offline_limit: Some("90s".to_owned()),
+        ..plain_entry()
+    };
+    let settings = ninety_s.settings().expect("whole seconds parse");
+    let [_, offline, _] = long_rows(&settings, SEC);
+    assert_eq!(offline.label.as_deref(), Some("offline for over 90 s"));
 }

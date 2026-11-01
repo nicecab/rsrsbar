@@ -77,6 +77,9 @@ fn deadline_formula() {
         git_timeout: None,
         lock_timeout: None,
         stall_threshold: None,
+        paused_limit: None,
+        offline_limit: None,
+        other_branch_limit: None,
         paused_at: None,
         allowed_hooks: None,
     };

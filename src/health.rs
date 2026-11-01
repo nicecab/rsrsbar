@@ -8,9 +8,8 @@ use crate::episode::RepoMemory;
 use crate::registry::Settings;
 use crate::status::{AttemptHealth, Outcome, RecentAttempt, StatusFile, StatusRead};
 
-const PAUSED_LONG: Duration = Duration::from_secs(24 * 3600);
-const OFFLINE_LONG: Duration = Duration::from_secs(2 * 3600);
-const OTHER_BRANCH_LONG: Duration = Duration::from_secs(24 * 3600);
+const SECS_PER_MINUTE: u64 = 60;
+const SECS_PER_HOUR: u64 = 3600;
 const FAILURE_RUN_MIN: u32 = 2;
 const INTERMITTENT_MIN: u32 = 3;
 /// Consecutive successes that end a red episode: `classify` cuts the failure
@@ -158,7 +157,7 @@ fn policy(row: Row) -> (Color, Notify) {
 /// wins. Every "more than X" comparison is strict.
 pub fn classify(obs: &Observation) -> Health {
     if let Some(paused_at) = obs.paused_at {
-        return paused(elapsed(paused_at, obs.now));
+        return paused(elapsed(paused_at, obs.now), obs.settings.paused_limit);
     }
     if !obs.hooks_trusted {
         return Health::new(Row::HooksChanged, Some("hook changed — needs allow"));
@@ -264,14 +263,17 @@ fn failure_label(status: &StatusFile, memory: &RepoMemory) -> (String, Option<St
 /// Rows 9 to 15. The time-based rows (9, 11, 13) are skipped in wake grace.
 fn time_rows(obs: &Observation, status: &StatusFile) -> Health {
     let late = |limit: Duration| !in_grace(obs) && since_success(status, obs.now) > limit;
+    let (offline_limit, branch_limit) =
+        (obs.settings.offline_limit, obs.settings.other_branch_limit);
     match status.last_outcome {
-        Outcome::Offline if late(OFFLINE_LONG) => {
-            return Health::new(Row::OfflineLong, Some("offline for over 2 h"));
+        Outcome::Offline if late(offline_limit) => {
+            let label = format!("offline for over {}", limit_text(offline_limit));
+            return Health::with_phase(Row::OfflineLong, Some(label), None);
         }
         Outcome::Offline => return Health::new(Row::Offline, None),
-        Outcome::BranchSkipped if late(OTHER_BRANCH_LONG) => {
+        Outcome::BranchSkipped if late(branch_limit) => {
             let branch = obs.current_branch.unwrap_or("another branch");
-            let label = format!("on {branch}, no sync for over 24 h");
+            let label = format!("on {branch}, no sync for over {}", limit_text(branch_limit));
             return Health::with_phase(Row::OtherBranchLong, Some(label), None);
         }
         Outcome::BranchSkipped => return Health::new(Row::OtherBranch, None),
@@ -304,11 +306,22 @@ fn since_success(status: &StatusFile, now: SystemTime) -> Duration {
 }
 
 /// Rows 1 and 2.
-fn paused(paused_for: Duration) -> Health {
-    if paused_for > PAUSED_LONG {
-        Health::new(Row::PausedLong, Some("paused for over 24 h"))
+fn paused(paused_for: Duration, limit: Duration) -> Health {
+    if paused_for > limit {
+        let label = format!("paused for over {}", limit_text(limit));
+        Health::with_phase(Row::PausedLong, Some(label), None)
     } else {
         Health::new(Row::Paused, None)
+    }
+}
+
+/// A limit for a label in the largest unit that divides it exactly (h, min,
+/// else s): the defaults read "24 h" and "2 h", an override "10 min".
+fn limit_text(limit: Duration) -> String {
+    match limit.as_secs() {
+        s if s > 0 && s % SECS_PER_HOUR == 0 => format!("{} h", s / SECS_PER_HOUR),
+        s if s > 0 && s % SECS_PER_MINUTE == 0 => format!("{} min", s / SECS_PER_MINUTE),
+        s => format!("{s} s"),
     }
 }
 
