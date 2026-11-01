@@ -11,9 +11,9 @@ use std::time::{Duration, Instant};
 
 use crate::registry::Settings;
 
-/// The first git-rsrs release with `status_file`; older releases reject the
-/// generated config.
-pub const MIN_GIT_RSRS: (u64, u64, u64) = (0, 2, 0);
+/// The first git-rsrs release with `status_file` (0.1.2); older releases
+/// reject the generated config.
+pub const MIN_GIT_RSRS: (u64, u64, u64) = (0, 1, 2);
 
 const VERSION_PREFIX: &str = "git-rsrs ";
 /// Lock wait, then fetch / push / one retry, each bounded by `git_timeout`.

@@ -37,7 +37,11 @@ fn version_parse_and_floor() {
         None,
         "a component beyond u64 is rejected"
     );
-    assert!(MIN_GIT_RSRS > (0, 1, 1));
+    assert_eq!(
+        MIN_GIT_RSRS,
+        (0, 1, 2),
+        "git-rsrs 0.1.2 is the first release with status_file"
+    );
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let old = script(tmp.path(), "old", "echo 'git-rsrs 0.1.1'");
@@ -49,10 +53,12 @@ fn version_parse_and_floor() {
         "{message}"
     );
     assert!(message.contains("0.1.1"), "{message}");
-    assert!(message.contains(&version_text(MIN_GIT_RSRS)), "{message}");
+    assert!(message.contains("is older than 0.1.2"), "{message}");
 
     let current = format!("echo 'git-rsrs {}'", version_text(MIN_GIT_RSRS));
     check_version(&script(tmp.path(), "current", &current)).expect("floor passes");
+    let newer = script(tmp.path(), "newer", "echo 'git-rsrs 0.2.0'");
+    check_version(&newer).expect("later releases pass");
 
     assert!(check_version(&script(tmp.path(), "garbage", "echo nonsense")).is_err());
     assert!(check_version(&tmp.path().join("missing")).is_err());
