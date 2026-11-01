@@ -3,6 +3,8 @@
 
 use std::io;
 use std::process::Command;
+
+use crate::child::{DEADLINE, output_within};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const SYSCTL: &str = "/usr/sbin/sysctl";
@@ -33,7 +35,7 @@ pub fn awake_since() -> io::Result<SystemTime> {
 }
 
 fn kern_time(name: &str) -> io::Result<SystemTime> {
-    let output = Command::new(SYSCTL).args(["-n", name]).output()?;
+    let output = output_within(Command::new(SYSCTL).args(["-n", name]), DEADLINE)?;
     if !output.status.success() {
         return Err(io::Error::other(format!("sysctl {name} failed")));
     }
@@ -78,9 +80,10 @@ fn number(text: &str) -> Option<u64> {
 /// How long `pid` has been running; `Ok(None)` when there is no such
 /// process.
 pub fn process_age(pid: u32) -> io::Result<Option<Duration>> {
-    let output = Command::new(PS)
-        .args(["-o", "etime=", "-p", &pid.to_string()])
-        .output()?;
+    let output = output_within(
+        Command::new(PS).args(["-o", "etime=", "-p", &pid.to_string()]),
+        DEADLINE,
+    )?;
     let text = String::from_utf8_lossy(&output.stdout);
     if !output.status.success() || text.trim().is_empty() {
         return Ok(None);

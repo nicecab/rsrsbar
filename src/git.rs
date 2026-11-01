@@ -6,6 +6,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::child::{DEADLINE, output_within};
+
 const GIT: &str = "git";
 
 /// A checkout as `add` sees it.
@@ -40,7 +42,7 @@ pub enum GitError {
 
 /// Runs `git -C <dir> <args>` and returns its stdout.
 fn git(dir: &Path, args: &[&str]) -> Result<Vec<u8>, GitError> {
-    let output = Command::new(GIT).arg("-C").arg(dir).args(args).output()?;
+    let output = output_within(Command::new(GIT).arg("-C").arg(dir).args(args), DEADLINE)?;
     if output.status.success() {
         return Ok(output.stdout);
     }

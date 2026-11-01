@@ -17,6 +17,7 @@ use crate::trust::present_hooks;
 
 mod add;
 mod allow;
+mod heartbeat;
 mod install;
 mod lifecycle;
 mod preview;
@@ -27,6 +28,7 @@ mod sync;
 
 pub use add::{AddArgs, add};
 pub use allow::allow;
+pub use heartbeat::check_heartbeat;
 pub use install::{ServiceChange, install_service};
 pub use lifecycle::{pause, refresh, restart, resume};
 pub use preview::{Preview, allow_preview};

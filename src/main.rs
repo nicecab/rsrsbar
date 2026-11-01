@@ -83,6 +83,9 @@ enum Managed {
     },
     /// Show every repository's health; exits 1 if any is red.
     Status,
+    /// Restart a stuck menu bar app, or alert; run by the heartbeat job.
+    #[command(hide = true)]
+    CheckHeartbeat,
 }
 
 fn main() -> ExitCode {
@@ -190,14 +193,23 @@ fn run(command: Managed) -> Result<Report, CommandError> {
         Managed::Restart { id } => commands::restart(&ctx, &id),
         Managed::Sync { id } => commands::sync(&ctx, &id),
         Managed::Allow { id, yes } => allow(&ctx, &id, yes),
-        Managed::Status => {
-            let awake = rsrsbar::awake_since().map_err(|source| CommandError::Io {
-                path: PathBuf::from("/usr/sbin/sysctl"),
-                source,
-            })?;
-            commands::status(&ctx, awake)
+        Managed::Status => commands::status(&ctx, awake_since()?),
+        Managed::CheckHeartbeat => {
+            // A wake time that cannot be read must not stop the last line of
+            // defence from deciding; it judges without wake grace.
+            let awake = awake_since()
+                .inspect_err(|err| eprintln!("rsrsbar: {}", one_line(&err.to_string())))
+                .ok();
+            commands::check_heartbeat(&ctx, awake)
         }
     }
+}
+
+fn awake_since() -> Result<SystemTime, CommandError> {
+    rsrsbar::awake_since().map_err(|source| CommandError::Io {
+        path: PathBuf::from("/usr/sbin/sysctl"),
+        source,
+    })
 }
 
 /// Prints the preview, then asks on a terminal unless `--yes`; without a

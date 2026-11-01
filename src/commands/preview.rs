@@ -10,6 +10,7 @@ use std::process::Command;
 
 use super::allow::snapshot_refusal;
 use super::{CommandError, Ctx, io_error, registered};
+use crate::child::{DEADLINE, output_within};
 use crate::trust::{EXEC_BITS, snapshot_digest, snapshot_hooks};
 
 const DIFF: &str = "/usr/bin/diff";
@@ -74,12 +75,9 @@ pub fn allow_preview(ctx: &Ctx, id: &str) -> Result<Preview, CommandError> {
 }
 
 fn content_diff(old: &Path, new: &Path) -> Result<Option<String>, CommandError> {
-    let output = Command::new(DIFF)
-        .args(["-ruN", "--no-dereference"])
-        .arg(old)
-        .arg(new)
-        .output()
-        .map_err(io_error(Path::new(DIFF)))?;
+    let mut command = Command::new(DIFF);
+    command.args(["-ruN", "--no-dereference"]).arg(old).arg(new);
+    let output = output_within(&mut command, DEADLINE).map_err(io_error(Path::new(DIFF)))?;
     match output.status.code() {
         Some(0) => Ok(None),
         Some(DIFF_DIFFERENT) => Ok(Some(

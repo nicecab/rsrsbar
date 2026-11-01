@@ -4,11 +4,13 @@
 pub mod app;
 mod atomic;
 mod bundle;
+mod child;
 pub mod commands;
 mod episode;
 mod git;
 mod gitrsrs;
 mod health;
+pub mod heartbeat;
 mod launchd;
 mod observe;
 mod paths;
@@ -21,6 +23,7 @@ mod trust;
 pub use app::Authorization;
 pub use atomic::write_atomic;
 pub use bundle::{BUNDLE_ID, bundle_root, info_plist};
+pub use child::output_within;
 pub use episode::{EpisodeKey, Notice, RecoveryPoint, RepoMemory, State, StateError, advance};
 pub use git::{GitError, RepoProbe, current_branch, probe};
 pub use gitrsrs::{
@@ -31,7 +34,7 @@ pub use health::{
 };
 pub use launchd::{JobInfo, Launchctl, Launchd, LaunchdError, Recording, parse_print};
 pub use observe::{ObserveError, RepoSnapshot, observe};
-pub use paths::{Paths, PathsError, RepoId, watch_label};
+pub use paths::{APP_LABEL, Paths, PathsError, RepoId, watch_label};
 pub use registry::{AppSettings, Registry, RegistryError, RepoEntry, Settings};
 pub use service::{GIT_RSRS, ServiceError, git_rsrs_config, launch_agent_plist};
 pub use status::{

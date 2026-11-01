@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 
 const MAX_ID_LEN: usize = 63;
 const LABEL_PREFIX: &str = "com.nicecab.rsrsbar.watch.";
+/// The launchd label of the menu bar app's job.
+pub const APP_LABEL: &str = "com.nicecab.rsrsbar";
 
 /// Errors from building repository ids.
 #[derive(Debug, thiserror::Error)]
@@ -110,6 +112,23 @@ impl Paths {
 
     pub fn state(&self) -> PathBuf {
         self.support_dir().join("state.json")
+    }
+
+    /// The app's liveness file, written every poll.
+    pub fn heartbeat(&self) -> PathBuf {
+        self.support_dir().join("heartbeat.json")
+    }
+
+    /// `check-heartbeat`'s own state.
+    pub fn heartbeat_state(&self) -> PathBuf {
+        self.support_dir().join("heartbeat-state.json")
+    }
+
+    /// The menu bar app's LaunchAgent plist.
+    pub fn app_agent(&self) -> PathBuf {
+        self.home
+            .join("Library/LaunchAgents")
+            .join(format!("{APP_LABEL}.plist"))
     }
 
     pub fn repo_dir(&self, id: &RepoId) -> PathBuf {
