@@ -21,6 +21,7 @@ mod lifecycle;
 mod preview;
 mod remove;
 mod run_hook;
+mod status;
 mod sync;
 
 pub use add::{AddArgs, add};
@@ -30,6 +31,7 @@ pub use lifecycle::{pause, refresh, restart, resume};
 pub use preview::{Preview, allow_preview};
 pub use remove::remove;
 pub use run_hook::{RunHookError, run_hook};
+pub use status::status;
 pub use sync::sync;
 
 /// Everything a command may touch, passed in explicitly.

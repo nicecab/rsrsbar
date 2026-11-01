@@ -63,6 +63,8 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Show every repository's health; exits 1 if any is red.
+    Status,
     /// Run one allowed hook phase; called by the generated git-rsrs config.
     #[command(hide = true)]
     RunHook { id: String, phase: String },
@@ -138,6 +140,13 @@ fn run(command: Command) -> Result<Report, CommandError> {
         Command::Restart { id } => commands::restart(&ctx, &id),
         Command::Sync { id } => commands::sync(&ctx, &id),
         Command::Allow { id, yes } => allow(&ctx, &id, yes),
+        Command::Status => {
+            let awake = rsrsbar::awake_since().map_err(|source| CommandError::Io {
+                path: PathBuf::from("/usr/sbin/sysctl"),
+                source,
+            })?;
+            commands::status(&ctx, awake)
+        }
         Command::RunHook { .. } => Err(CommandError::Refused(
             "run-hook is handled before the command context".to_owned(),
         )),
