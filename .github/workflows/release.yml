@@ -80,10 +80,11 @@ jobs:
     # The same gates and packaging as ci.yml's test, clippy and package jobs,
     # repeated because a tag push need not have gone through a PR.
     steps:
-      # Build exactly the commit prepare validated, even if main moved on.
+      # github.sha is fixed when the run starts and is the commit prepare
+      # validated and publish tags, so main moving on changes nothing here.
       - uses: actions/checkout@v7.0.1
         with:
-          ref: ${{ needs.prepare.outputs.sha }}
+          ref: ${{ github.sha }}
       - name: Install pinned toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@v2.9.2
@@ -121,7 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
         with:
-          ref: ${{ needs.prepare.outputs.sha }}
+          ref: ${{ github.sha }}
       - uses: taiki-e/install-action@v2.87.30
         with:
           tool: cargo-audit@0.22.2
