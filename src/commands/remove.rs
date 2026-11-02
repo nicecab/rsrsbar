@@ -5,7 +5,9 @@ use crate::episode::State;
 use crate::paths::{RepoId, watch_label};
 use crate::registry::Registry;
 
-/// Boots the job out (an unloaded job is fine), deletes the plist and the
+/// Boots the job out (an unloaded job is fine), enables its label (a paused
+/// repository's label is disabled, which would refuse a later `add` of the
+/// same id), deletes the plist and the
 /// git-rsrs config, unregisters the entry and drops its memory from
 /// `state.json`. The status file, the allowed snapshot and the logs stay as
 /// history; the report says where. A state file that cannot be updated
@@ -15,7 +17,9 @@ pub fn remove(ctx: &Ctx, id: &str) -> Result<Report, CommandError> {
     // entry that a concurrent remove + add has since replaced.
     let (_services, entry) = locked_entry(ctx, id)?;
     let id = entry.id;
-    ctx.launchd.bootout(&watch_label(&id))?;
+    let label = watch_label(&id);
+    ctx.launchd.bootout(&label)?;
+    ctx.launchd.enable(&label)?;
     remove_file(&ctx.paths.launch_agent(&id))?;
     remove_file(&ctx.paths.git_rsrs_config(&id))?;
     Registry::update(&ctx.paths.registry(), |r| r.without(&id))?;

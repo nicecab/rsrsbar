@@ -34,27 +34,34 @@ fn rfc3339(time: SystemTime) -> String {
     humantime::format_rfc3339_seconds(time).to_string()
 }
 
-/// Stops the watcher (`bootout`; an unloaded job is fine) and records
-/// `paused_at = now`. Already paused → a note, exit 0.
+/// Stops the watcher (`bootout`; an unloaded job is fine), records
+/// `paused_at = now`, then disables the label: the plist stays in
+/// `~/Library/LaunchAgents`, and launchd would load it again at the next
+/// login. Already paused → a note, exit 0, and the disable is repeated in
+/// case it failed the first time.
 pub fn pause(ctx: &Ctx, id: &str) -> Result<Report, CommandError> {
     let (_services, entry) = locked_entry(ctx, id)?;
+    let label = watch_label(&entry.id);
     if let Some(since) = &entry.paused_at {
+        ctx.launchd.disable(&label)?;
         return Ok(Report::ok(format!(
             "{} is already paused since {since}",
             entry.id
         )));
     }
-    ctx.launchd.bootout(&watch_label(&entry.id))?;
+    ctx.launchd.bootout(&label)?;
     set_paused_at(ctx, &entry.id, Some(rfc3339(ctx.now)))?;
+    ctx.launchd.disable(&label)?;
     Ok(Report::ok(format!(
         "paused {0}; its watcher stays stopped until rsrsbar resume {0}",
         entry.id
     )))
 }
 
-/// Rewrites the service files, bootstraps the watcher and only then clears
-/// `paused_at`: a failed bootstrap (e.g. the label was loaded by hand)
-/// leaves the entry paused. Not paused → a note, exit 0.
+/// Rewrites the service files, enables the label `pause` disabled,
+/// bootstraps the watcher and only then clears `paused_at`: a failed
+/// bootstrap (e.g. the label was loaded by hand) leaves the entry paused.
+/// Not paused → a note, exit 0.
 pub fn resume(ctx: &Ctx, id: &str) -> Result<Report, CommandError> {
     let (_services, entry) = locked_entry(ctx, id)?;
     if entry.paused_at.is_none() {
@@ -62,6 +69,7 @@ pub fn resume(ctx: &Ctx, id: &str) -> Result<Report, CommandError> {
     }
     install_service(ctx, &entry)?;
     let label = watch_label(&entry.id);
+    ctx.launchd.enable(&label)?;
     if let Err(err) = ctx.launchd.bootstrap(&ctx.paths.launch_agent(&entry.id)) {
         return Err(CommandError::Refused(format!(
             "cannot start {label}: {err}; {} stays paused. If the job is loaded \

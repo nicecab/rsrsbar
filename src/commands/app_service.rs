@@ -39,11 +39,14 @@ pub fn start(ctx: &Ctx) -> Result<Report, CommandError> {
 
 /// Unloads the heartbeat job first — so it never sees the deliberately
 /// stopped app as stuck and restarts it — then the app, under the service
-/// lock. Watchers are not touched.
+/// lock, disabling each so that the next login does not load it again
+/// (`start` enables them). Watchers are not touched.
 pub fn stop(ctx: &Ctx) -> Result<Report, CommandError> {
     let _services = lock_services(ctx)?;
-    ctx.launchd.bootout(HEARTBEAT_LABEL)?;
-    ctx.launchd.bootout(APP_LABEL)?;
+    for label in [HEARTBEAT_LABEL, APP_LABEL] {
+        ctx.launchd.bootout(label)?;
+        ctx.launchd.disable(label)?;
+    }
     Ok(Report::ok(
         "rsrsbar stopped; repositories keep syncing".to_owned(),
     ))
@@ -62,7 +65,9 @@ fn load(ctx: &Ctx, label: &str, plist: &Path, bytes: &[u8]) -> Result<(), Comman
     result
 }
 
-/// launchd keeps the plist it loaded: a changed one needs a reload.
+/// launchd keeps the plist it loaded: a changed one needs a reload. A job
+/// that is not loaded may have been disabled by `stop`, so it is enabled
+/// before its bootstrap.
 fn apply(ctx: &Ctx, label: &str, plist: &Path, changed: bool) -> Result<(), CommandError> {
     match (ctx.launchd.job(label)?.is_some(), changed) {
         (true, false) => ctx.launchd.kickstart(label)?,
@@ -70,7 +75,10 @@ fn apply(ctx: &Ctx, label: &str, plist: &Path, changed: bool) -> Result<(), Comm
             ctx.launchd.bootout(label)?;
             ctx.launchd.bootstrap(plist)?;
         }
-        (false, _) => ctx.launchd.bootstrap(plist)?,
+        (false, _) => {
+            ctx.launchd.enable(label)?;
+            ctx.launchd.bootstrap(plist)?;
+        }
     }
     Ok(())
 }

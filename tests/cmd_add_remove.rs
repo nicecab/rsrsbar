@@ -202,7 +202,11 @@ fn remove_tolerates_unloaded_job() {
     let state = State::load(&fx.paths.state()).expect("state");
     assert!(!state.repos.contains_key(&repo_id));
     assert!(state.repos.contains_key(&id("keep")));
-    assert_eq!(launchd.calls().last(), Some(&format!("bootout {label}")));
+    assert_eq!(
+        launchd.calls()[launchd.calls().len() - 2..],
+        [format!("bootout {label}"), format!("enable {label}")],
+        "a removed repository leaves no disabled label behind"
+    );
 
     assert!(remove(&ctx, "repo").is_err(), "unknown id");
 }

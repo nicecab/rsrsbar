@@ -40,7 +40,10 @@ fn pause_then_resume() {
 
     let report = pause(&ctx, "demo").expect("pause");
     assert_eq!(report.exit_code, 0);
-    assert_eq!(launchd.calls(), vec![format!("bootout {label}")]);
+    assert_eq!(
+        launchd.calls(),
+        vec![format!("bootout {label}"), format!("disable {label}")]
+    );
     assert_eq!(paused_at(&fx, &demo), Some(common::now()));
 
     let again = pause(&ctx, "demo").expect("pause again");
@@ -50,20 +53,44 @@ fn pause_then_resume() {
         "{}",
         again.text
     );
-    assert_eq!(launchd.calls().len(), 1, "no second bootout");
+    assert_eq!(
+        launchd.calls()[2..],
+        [format!("disable {label}")],
+        "no second bootout; the disable is repeated in case it failed before"
+    );
 
     resume(&ctx, "demo").expect("resume");
     let plist = fx.paths.launch_agent(&demo);
     assert_eq!(
-        launchd.calls().last(),
-        Some(&format!("bootstrap {}", plist.display()))
+        launchd.calls()[3..],
+        [
+            format!("enable {label}"),
+            format!("bootstrap {}", plist.display())
+        ]
     );
+    assert!(!launchd.is_disabled(&label));
     assert_eq!(paused_at(&fx, &demo), None);
 
     let note = resume(&ctx, "demo").expect("resume when not paused");
     assert_eq!(note.exit_code, 0);
     assert!(note.text.contains("is not paused"), "{}", note.text);
     assert!(pause(&ctx, "unknown").is_err());
+}
+
+#[test]
+fn paused_watcher_stays_stopped_after_login() {
+    let fx = Fixture::new();
+    let demo = add_repo(&fx, &fx.ctx(&Recording::new()), "demo");
+    let label = watch_label(&demo);
+    let launchd = Recording::new().with_loaded(&label, Some(4321));
+
+    pause(&fx.ctx(&launchd), "demo").expect("pause");
+    // At login launchd loads every plist in ~/Library/LaunchAgents unless
+    // its label is disabled; the plist stays, so the label must be.
+    assert!(fx.paths.launch_agent(&demo).is_file());
+    assert!(launchd.is_disabled(&label));
+    assert!(launchd.bootstrap(&fx.paths.launch_agent(&demo)).is_err());
+    assert_eq!(launchd.job(&label).expect("job"), None);
 }
 
 #[test]
@@ -283,7 +310,10 @@ fn resume_failure_stays_paused() {
     let plist = fx.paths.launch_agent(&demo);
     assert_eq!(
         launchd.calls(),
-        vec![format!("bootstrap {}", plist.display())]
+        vec![
+            format!("enable {label}"),
+            format!("bootstrap {}", plist.display())
+        ]
     );
 }
 

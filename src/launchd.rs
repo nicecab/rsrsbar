@@ -3,7 +3,7 @@
 
 use crate::child::{DEADLINE, output_within};
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::io;
 use std::path::Path;
@@ -50,6 +50,12 @@ pub trait Launchd {
     fn bootout(&self, label: &str) -> Result<(), LaunchdError>;
     /// Restarts `label` (`kickstart -k`).
     fn kickstart(&self, label: &str) -> Result<(), LaunchdError>;
+    /// Marks `label` disabled: launchd then refuses to load it, by
+    /// `bootstrap` or at login, until it is enabled. Persists across
+    /// reboots; does not unload a loaded job.
+    fn disable(&self, label: &str) -> Result<(), LaunchdError>;
+    /// Clears a disabled mark; a label that is not disabled is `Ok(())`.
+    fn enable(&self, label: &str) -> Result<(), LaunchdError>;
     /// The job's state, `Ok(None)` when it is not loaded.
     fn job(&self, label: &str) -> Result<Option<JobInfo>, LaunchdError>;
 }
@@ -158,6 +164,18 @@ impl Launchd for Launchctl {
         checked(&args, &self.run(&args)?)
     }
 
+    fn disable(&self, label: &str) -> Result<(), LaunchdError> {
+        let target = self.target(label);
+        let args = [OsStr::new("disable"), OsStr::new(&target)];
+        checked(&args, &self.run(&args)?)
+    }
+
+    fn enable(&self, label: &str) -> Result<(), LaunchdError> {
+        let target = self.target(label);
+        let args = [OsStr::new("enable"), OsStr::new(&target)];
+        checked(&args, &self.run(&args)?)
+    }
+
     fn job(&self, label: &str) -> Result<Option<JobInfo>, LaunchdError> {
         let target = self.target(label);
         let args = [OsStr::new("print"), OsStr::new(&target)];
@@ -172,13 +190,14 @@ impl Launchd for Launchctl {
     }
 }
 
-/// A test double for [`Launchd`]: records every `bootstrap`, `bootout` and
-/// `kickstart` call, successful or refused, as a string (`"bootstrap <path>"`,
-/// `"bootout <label>"`, `"kickstart <label>"`; `job` lookups are not
-/// recorded) and
-/// keeps the loaded labels, refusing what real launchd refuses (bootstrap of
-/// a loaded label, kickstart of an unloaded one). A bootstrapped label is
-/// the plist's file stem and gets a fresh fake PID, as with `RunAtLoad`.
+/// A test double for [`Launchd`]: records every `bootstrap`, `bootout`,
+/// `kickstart`, `disable` and `enable` call, successful or refused, as a
+/// string (`"bootstrap <path>"`, `"bootout <label>"`, `"kickstart <label>"`,
+/// `"disable <label>"`, `"enable <label>"`; `job` lookups are not recorded)
+/// and keeps the loaded and disabled labels, refusing what real launchd
+/// refuses (bootstrap of a loaded or disabled label, kickstart of an
+/// unloaded one). A bootstrapped label is the plist's file stem and gets a
+/// fresh fake PID, as with `RunAtLoad`.
 #[derive(Debug, Default)]
 pub struct Recording {
     state: RefCell<RecordingState>,
@@ -188,6 +207,7 @@ pub struct Recording {
 struct RecordingState {
     calls: Vec<String>,
     loaded: BTreeMap<String, Option<u32>>,
+    disabled: BTreeSet<String>,
     fail_next_bootstrap: bool,
     fail_next_kickstart: bool,
     spawned: u32,
@@ -230,6 +250,11 @@ impl Recording {
         self.state.borrow_mut().fail_next_kickstart = true;
     }
 
+    /// Whether `label` is currently disabled.
+    pub fn is_disabled(&self, label: &str) -> bool {
+        self.state.borrow().disabled.contains(label)
+    }
+
     /// Every call so far, oldest first.
     pub fn calls(&self) -> Vec<String> {
         self.state.borrow().calls.clone()
@@ -243,7 +268,11 @@ impl Launchd for Recording {
         let label = plist.file_stem().map(|s| s.to_string_lossy().into_owned());
         let shown = plist.display().to_string();
         match label {
-            Some(label) if !state.fail_next_bootstrap && !state.loaded.contains_key(&label) => {
+            Some(label)
+                if !state.fail_next_bootstrap
+                    && !state.loaded.contains_key(&label)
+                    && !state.disabled.contains(&label) =>
+            {
                 let pid = state.next_pid();
                 state.loaded.insert(label, Some(pid));
                 Ok(())
@@ -288,6 +317,20 @@ impl Launchd for Recording {
         }
         let pid = state.next_pid();
         state.loaded.insert(label.to_owned(), Some(pid));
+        Ok(())
+    }
+
+    fn disable(&self, label: &str) -> Result<(), LaunchdError> {
+        let mut state = self.state.borrow_mut();
+        state.calls.push(format!("disable {label}"));
+        state.disabled.insert(label.to_owned());
+        Ok(())
+    }
+
+    fn enable(&self, label: &str) -> Result<(), LaunchdError> {
+        let mut state = self.state.borrow_mut();
+        state.calls.push(format!("enable {label}"));
+        state.disabled.remove(label);
         Ok(())
     }
 
