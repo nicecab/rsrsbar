@@ -1,0 +1,167 @@
+# Publishes rsrsbar.app as a GitHub release: the ad-hoc-signed bundle zipped
+# by scripts/bundle.sh --zip, plus its .sha256, and nothing else.
+# Runs on a v* tag push, or by hand from main for a version already merged
+# there (the tag is then created by the publish job).
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Package version already merged into main (for example, 0.2.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Releases never cancel each other: a half-published release is worse than a
+# queued one.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prepare:
+    name: Validate release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      sha: ${{ steps.release.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      # Only stable MAJOR.MINOR.PATCH versions; the tag is always v + the
+      # Cargo.toml version, and manual releases come only from main.
+      - name: Validate release source and version
+        id: release
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED_VERSION: ${{ inputs.version }}
+          REF_NAME: ${{ github.ref_name }}
+          REF: ${{ github.ref }}
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          import re
+          import subprocess
+          import tomllib
+
+          version = tomllib.loads(open("Cargo.toml").read())["package"]["version"]
+          if not re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version):
+              raise SystemExit("Only stable MAJOR.MINOR.PATCH versions can be released")
+          tag = f"v{version}"
+          if os.environ["EVENT_NAME"] == "workflow_dispatch":
+              if os.environ["REF"] != "refs/heads/main":
+                  raise SystemExit("Run manual releases from main")
+              if os.environ["REQUESTED_VERSION"] != version:
+                  raise SystemExit("Requested version must match Cargo.toml on main")
+          elif os.environ["REF_NAME"] != tag:
+              raise SystemExit("Release tag must match Cargo.toml")
+          sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"tag={tag}\nsha={sha}\n")
+          PYTHON
+
+  build:
+    name: Build and package
+    needs: prepare
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+      ZIP: dist/rsrsbar-${{ needs.prepare.outputs.tag }}-aarch64-apple-darwin.zip
+    # The same gates and packaging as ci.yml's test, clippy and package jobs,
+    # repeated because a tag push need not have gone through a PR.
+    steps:
+      # github.sha is fixed when the run starts and is the commit prepare
+      # validated and publish tags, so main moving on changes nothing here.
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - name: Install pinned toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          shared-key: release
+          # A cache saved under a tag ref is never restored by a later
+          # release (each has its own tag), so only main saves one.
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Verify tag matches package version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          test "$RELEASE_TAG" = "v$version"
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --all-targets --all-features
+      - name: Build the release zip
+        run: scripts/bundle.sh --zip dist
+      # The zip is checked as it will be published: checksum, signature after
+      # unpacking, Info.plist and the version the binary reports.
+      - name: Check the release zip
+        run: scripts/verify-package.sh "$ZIP" "${RELEASE_TAG#v}"
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: release
+          path: |
+            ${{ env.ZIP }}
+            ${{ env.ZIP }}.sha256
+          if-no-files-found: error
+
+  audit:
+    name: Audit release dependencies
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - uses: taiki-e/install-action@v2.87.30
+        with:
+          tool: cargo-audit@0.22.2
+      - run: cargo audit --deny warnings
+
+  publish:
+    name: Publish release
+    needs: [prepare, build, audit]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    # The only job that may write: it creates the tag and the release.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: release
+          path: dist
+      - name: Create release tag for manual runs
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_SHA: ${{ needs.prepare.outputs.sha }}
+        run: |
+          # A rerun may find the tag created by an earlier failed publish step;
+          # a tag that points anywhere else is never moved.
+          if existing=$(gh api "repos/$GH_REPO/git/ref/tags/$RELEASE_TAG" --jq '.object.sha'); then
+            test "$existing" = "$RELEASE_SHA"
+          else
+            gh api --method POST "repos/$GH_REPO/git/refs" \
+              -f "ref=refs/tags/$RELEASE_TAG" -f "sha=$RELEASE_SHA"
+          fi
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          zip="dist/rsrsbar-$RELEASE_TAG-aarch64-apple-darwin.zip"
+          gh release create "$RELEASE_TAG" --verify-tag --generate-notes "$zip" "$zip.sha256"

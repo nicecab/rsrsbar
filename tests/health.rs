@@ -735,8 +735,8 @@ fn wake_grace_defers_time_rows() {
 /// A registry entry with every override left at its default.
 fn plain_entry() -> RepoEntry {
     RepoEntry {
-        id: RepoId::new("obaidoc").expect("valid id"),
-        path: PathBuf::from("/x/obaidoc"),
+        id: RepoId::new("notes").expect("valid id"),
+        path: PathBuf::from("/x/notes"),
         branch: "main".to_owned(),
         remote: "origin".to_owned(),
         lock_name: None,
@@ -895,7 +895,7 @@ fn long_limit_overrides() {
             let err = entry.settings().expect_err("limit must be refused");
             let text = err.to_string();
             assert!(
-                text.contains("obaidoc") && text.contains(key),
+                text.contains("notes") && text.contains(key),
                 "{value}: {text}"
             );
         }

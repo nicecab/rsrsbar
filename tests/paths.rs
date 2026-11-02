@@ -9,8 +9,8 @@ fn id(s: &str) -> RepoId {
 
 #[test]
 fn repo_id_rules() {
-    assert_eq!(id("obaidoc").as_str(), "obaidoc");
-    assert_eq!(id("tom-coten-hub").as_str(), "tom-coten-hub");
+    assert_eq!(id("notes").as_str(), "notes");
+    assert_eq!(id("team-hub").as_str(), "team-hub");
     assert!(RepoId::new(&"a".repeat(63)).is_ok());
     for bad in ["", "-x", "A", "a/b", "a_b", "a b", "é"] {
         assert!(RepoId::new(bad).is_err(), "{bad:?} must be rejected");
@@ -20,12 +20,9 @@ fn repo_id_rules() {
 
 #[test]
 fn repo_id_deserialization_validates() {
-    let ok: RepoId = serde_json::from_str("\"obaidoc\"").expect("valid id");
-    assert_eq!(ok, id("obaidoc"));
-    assert_eq!(
-        serde_json::to_string(&ok).expect("serialize"),
-        "\"obaidoc\""
-    );
+    let ok: RepoId = serde_json::from_str("\"notes\"").expect("valid id");
+    assert_eq!(ok, id("notes"));
+    assert_eq!(serde_json::to_string(&ok).expect("serialize"), "\"notes\"");
     assert!(serde_json::from_str::<RepoId>("\"-x\"").is_err());
     assert!(serde_json::from_str::<RepoId>("\"A\"").is_err());
 }
@@ -34,8 +31,8 @@ fn repo_id_deserialization_validates() {
 fn suggest_from_path() {
     let suggest = |p: &str| RepoId::suggest(Path::new(p));
     assert_eq!(
-        suggest("/x/tomoya55/my-llm-config").expect("ok"),
-        id("my-llm-config")
+        suggest("/x/someone55/my-dotfiles").expect("ok"),
+        id("my-dotfiles")
     );
     assert_eq!(suggest("/x/My Repo_v2").expect("ok"), id("my-repo-v2"));
     assert_eq!(suggest("/x/a--__--b").expect("ok"), id("a-b"));
@@ -47,7 +44,7 @@ fn suggest_from_path() {
 #[test]
 fn paths_layout() {
     let paths = Paths::new(PathBuf::from("/Users/t"));
-    let obaidoc = id("obaidoc");
+    let notes = id("notes");
     let support = "/Users/t/Library/Application Support/rsrsbar";
     assert_eq!(paths.support_dir(), PathBuf::from(support));
     assert_eq!(
@@ -59,29 +56,29 @@ fn paths_layout() {
         PathBuf::from(format!("{support}/state.json"))
     );
     assert_eq!(
-        paths.repo_dir(&obaidoc),
-        PathBuf::from(format!("{support}/repos/obaidoc"))
+        paths.repo_dir(&notes),
+        PathBuf::from(format!("{support}/repos/notes"))
     );
     assert_eq!(
-        paths.git_rsrs_config(&obaidoc),
-        PathBuf::from(format!("{support}/repos/obaidoc/git-rsrs.toml"))
+        paths.git_rsrs_config(&notes),
+        PathBuf::from(format!("{support}/repos/notes/git-rsrs.toml"))
     );
     assert_eq!(
-        paths.status_file(&obaidoc),
-        PathBuf::from(format!("{support}/repos/obaidoc/status.json"))
+        paths.status_file(&notes),
+        PathBuf::from(format!("{support}/repos/notes/status.json"))
     );
-    assert_eq!(watch_label(&obaidoc), "com.nicecab.rsrsbar.watch.obaidoc");
+    assert_eq!(watch_label(&notes), "com.nicecab.rsrsbar.watch.notes");
     assert_eq!(
-        paths.launch_agent(&obaidoc),
-        PathBuf::from("/Users/t/Library/LaunchAgents/com.nicecab.rsrsbar.watch.obaidoc.plist")
-    );
-    assert_eq!(
-        paths.stdout_log(&obaidoc),
-        PathBuf::from("/Users/t/Library/Logs/com.nicecab.rsrsbar.watch.obaidoc.log")
+        paths.launch_agent(&notes),
+        PathBuf::from("/Users/t/Library/LaunchAgents/com.nicecab.rsrsbar.watch.notes.plist")
     );
     assert_eq!(
-        paths.stderr_log(&obaidoc),
-        PathBuf::from("/Users/t/Library/Logs/com.nicecab.rsrsbar.watch.obaidoc.error.log")
+        paths.stdout_log(&notes),
+        PathBuf::from("/Users/t/Library/Logs/com.nicecab.rsrsbar.watch.notes.log")
+    );
+    assert_eq!(
+        paths.stderr_log(&notes),
+        PathBuf::from("/Users/t/Library/Logs/com.nicecab.rsrsbar.watch.notes.error.log")
     );
     assert_eq!(
         paths.mise_shims(),

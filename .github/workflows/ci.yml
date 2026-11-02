@@ -59,3 +59,22 @@ jobs:
           shared-key: test
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test --locked --all-targets --all-features
+
+  package:
+    name: Package
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install pinned toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2.9.2
+        with:
+          shared-key: package
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build the release zip
+        run: scripts/bundle.sh --zip "$RUNNER_TEMP/dist"
+      - name: Check the release zip
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
+          scripts/verify-package.sh "$RUNNER_TEMP"/dist/*.zip "$version"

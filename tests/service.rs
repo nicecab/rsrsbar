@@ -51,13 +51,8 @@ fn string<'a>(dict: &'a plist::Dictionary, key: &str) -> &'a str {
 #[test]
 fn config_is_accepted_by_git_rsrs() {
     let paths = Paths::new(PathBuf::from("/Users/t"));
-    let obaidoc = entry(
-        "obaidoc",
-        "/x/obaidoc",
-        "main",
-        Some("docs-maintenance.lock"),
-    );
-    let config = Config::parse(&config_text(&obaidoc, &paths)).expect("git-rsrs accepts");
+    let notes = entry("notes", "/x/notes", "main", Some("docs-maintenance.lock"));
+    let config = Config::parse(&config_text(&notes, &paths)).expect("git-rsrs accepts");
 
     assert_eq!(config.branch, "main");
     assert_eq!(config.remote, "origin");
@@ -69,7 +64,7 @@ fn config_is_accepted_by_git_rsrs() {
     assert_eq!(
         config.status_file,
         Some(PathBuf::from(
-            "/Users/t/Library/Application Support/rsrsbar/repos/obaidoc/status.json"
+            "/Users/t/Library/Application Support/rsrsbar/repos/notes/status.json"
         ))
     );
     let hooks = &config.hooks;
@@ -78,15 +73,15 @@ fn config_is_accepted_by_git_rsrs() {
     assert_eq!(hooks.on_result.len(), 1);
     assert_eq!(
         hooks.pre_commit[0].command,
-        [EXE, "run-hook", "obaidoc", "pre-commit"]
+        [EXE, "run-hook", "notes", "pre-commit"]
     );
     assert_eq!(
         hooks.post_integrate[0].command,
-        [EXE, "run-hook", "obaidoc", "post-integrate"]
+        [EXE, "run-hook", "notes", "post-integrate"]
     );
     assert_eq!(
         hooks.on_result[0].command,
-        [EXE, "run-hook", "obaidoc", "on-result"]
+        [EXE, "run-hook", "notes", "on-result"]
     );
     assert_eq!(hooks.pre_commit[0].reject_exit_codes, [3]);
     assert!(hooks.post_integrate[0].reject_exit_codes.is_empty());
@@ -127,9 +122,9 @@ fn lock_name_omitted_by_default() {
 #[test]
 fn plist_matches_todays_shape() {
     let paths = Paths::new(PathBuf::from("/Users/t"));
-    let dict = plist_dict(&entry("obaidoc", "/x/obaidoc", "main", None), &paths);
+    let dict = plist_dict(&entry("notes", "/x/notes", "main", None), &paths);
 
-    assert_eq!(string(&dict, "Label"), "com.nicecab.rsrsbar.watch.obaidoc");
+    assert_eq!(string(&dict, "Label"), "com.nicecab.rsrsbar.watch.notes");
     assert_eq!(
         dict.get("KeepAlive").and_then(Value::as_boolean),
         Some(true)
@@ -143,7 +138,7 @@ fn plist_matches_todays_shape() {
             .and_then(Value::as_signed_integer),
         Some(30)
     );
-    assert_eq!(string(&dict, "WorkingDirectory"), "/x/obaidoc");
+    assert_eq!(string(&dict, "WorkingDirectory"), "/x/notes");
     let args: Vec<&str> = dict
         .get("ProgramArguments")
         .and_then(Value::as_array)
@@ -156,9 +151,9 @@ fn plist_matches_todays_shape() {
         [
             "/opt/homebrew/bin/git-rsrs",
             "--repo",
-            "/x/obaidoc",
+            "/x/notes",
             "--config",
-            "/Users/t/Library/Application Support/rsrsbar/repos/obaidoc/git-rsrs.toml",
+            "/Users/t/Library/Application Support/rsrsbar/repos/notes/git-rsrs.toml",
             "watch",
         ]
     );
@@ -173,11 +168,11 @@ fn plist_matches_todays_shape() {
     );
     assert_eq!(
         string(&dict, "StandardOutPath"),
-        "/Users/t/Library/Logs/com.nicecab.rsrsbar.watch.obaidoc.log"
+        "/Users/t/Library/Logs/com.nicecab.rsrsbar.watch.notes.log"
     );
     assert_eq!(
         string(&dict, "StandardErrorPath"),
-        "/Users/t/Library/Logs/com.nicecab.rsrsbar.watch.obaidoc.error.log"
+        "/Users/t/Library/Logs/com.nicecab.rsrsbar.watch.notes.error.log"
     );
 }
 

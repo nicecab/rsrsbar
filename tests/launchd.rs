@@ -12,7 +12,7 @@ const SELFTEST: &str = "com.nicecab.rsrsbar.watch.selftest";
 // `pid = 99` inside a block must be ignored.
 const PRINT_RUNNING: &str = "gui/501/com.nicecab.rsrsbar.watch.demo = {
 \tactive count = 1
-\tpath = /Users/tom/Library/LaunchAgents/com.nicecab.rsrsbar.watch.demo.plist
+\tpath = /Users/user/Library/LaunchAgents/com.nicecab.rsrsbar.watch.demo.plist
 \ttype = LaunchAgent
 \tstate = running
 
@@ -37,7 +37,7 @@ const PRINT_RUNNING: &str = "gui/501/com.nicecab.rsrsbar.watch.demo = {
 
 const PRINT_NOT_RUNNING: &str = "gui/501/com.nicecab.rsrsbar.watch.demo = {
 \tactive count = 0
-\tpath = /Users/tom/Library/LaunchAgents/com.nicecab.rsrsbar.watch.demo.plist
+\tpath = /Users/user/Library/LaunchAgents/com.nicecab.rsrsbar.watch.demo.plist
 \ttype = LaunchAgent
 \tstate = not running
 
