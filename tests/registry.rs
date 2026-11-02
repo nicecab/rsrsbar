@@ -41,7 +41,7 @@ fn secs(s: u64) -> Duration {
 
 #[test]
 fn defaults_and_threshold() {
-    let base = entry("obaidoc", Path::new("/x/obaidoc"));
+    let base = entry("notes", Path::new("/x/notes"));
     let s = base.settings().expect("defaults parse");
     assert_eq!(s.interval, secs(600));
     assert_eq!(s.quiet_period, secs(30));
@@ -67,11 +67,11 @@ fn defaults_and_threshold() {
 fn bad_duration_rejected_on_load() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let path = tmp.path().join("registry.toml");
-    let text = "version = 1\n\n[[repo]]\nid = \"obaidoc\"\npath = \"/x/obaidoc\"\n\
+    let text = "version = 1\n\n[[repo]]\nid = \"notes\"\npath = \"/x/notes\"\n\
                 branch = \"main\"\nremote = \"origin\"\ninterval = \"soon\"\n";
     fs::write(&path, text).expect("write");
     let err = Registry::load(&path).expect_err("bad duration must fail");
-    assert!(err.to_string().contains("obaidoc"), "{err}");
+    assert!(err.to_string().contains("notes"), "{err}");
 }
 
 #[test]
@@ -96,9 +96,9 @@ fn round_trip() {
     let docs = RepoEntry {
         lock_name: Some("docs-maintenance.lock".to_owned()),
         paused_at: Some("2026-11-01T10:00:00Z".to_owned()),
-        ..entry("obaidoc", &mkdir(tmp.path().join("obaidoc")))
+        ..entry("notes", &mkdir(tmp.path().join("notes")))
     };
-    let plain = entry("tom-coten-hub", &mkdir(tmp.path().join("My Repo/hub")));
+    let plain = entry("team-hub", &mkdir(tmp.path().join("My Repo/hub")));
     let registry = Registry::default()
         .with_added(docs)
         .and_then(|r| r.with_added(plain))
@@ -276,11 +276,11 @@ fn durations_git_rsrs_rejects_are_refused() {
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let path = tmp.path().join("registry.toml");
-    let text = "version = 1\n\n[[repo]]\nid = \"obaidoc\"\npath = \"/x/obaidoc\"\n\
+    let text = "version = 1\n\n[[repo]]\nid = \"notes\"\npath = \"/x/notes\"\n\
                 branch = \"main\"\nremote = \"origin\"\ninterval = \"0s\"\n";
     fs::write(&path, text).expect("write");
     let err = Registry::load(&path).expect_err("zero interval must fail on load");
-    assert!(err.to_string().contains("obaidoc"), "{err}");
+    assert!(err.to_string().contains("notes"), "{err}");
 }
 
 #[test]
@@ -403,7 +403,7 @@ fn editors_never_return_a_registry_load_would_reject() {
 fn app_settings_round_trip() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let path = tmp.path().join("registry.toml");
-    let repo = entry("obaidoc", &mkdir(tmp.path().join("obaidoc")));
+    let repo = entry("notes", &mkdir(tmp.path().join("notes")));
     let plain = Registry::default().with_added(repo).expect("added");
     assert_eq!(plain.app, AppSettings::default());
     assert_eq!(plain.app.terminal_app(), "Terminal");
@@ -445,14 +445,11 @@ fn app_settings_round_trip() {
 
     // Every editor keeps the app settings.
     let edited = loaded
-        .with_entry(&id("obaidoc"), |e| RepoEntry {
+        .with_entry(&id("notes"), |e| RepoEntry {
             paused_at: Some("2026-11-01T10:00:00Z".to_owned()),
             ..e.clone()
         })
         .expect("edited");
     assert_eq!(edited.app, zed.app);
-    assert_eq!(
-        edited.without(&id("obaidoc")).expect("removed").app,
-        zed.app
-    );
+    assert_eq!(edited.without(&id("notes")).expect("removed").app, zed.app);
 }

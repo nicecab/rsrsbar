@@ -191,7 +191,7 @@ fn restart_does_not_resend() {
 
     let tmp = tempfile::tempdir().expect("tempdir");
     let path = tmp.path().join("state.json");
-    let id = RepoId::new("obaidoc").expect("id");
+    let id = RepoId::new("notes").expect("id");
     State::default()
         .with_repo(&id, last.memory.clone())
         .save(&path)
