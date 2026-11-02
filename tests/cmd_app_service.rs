@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use common::{Fixture, plist_dict as dict, plist_string as string};
 use plist::Value;
 use rsrsbar::commands::{Ctx, start, stop};
-use rsrsbar::{Paths, Recording, app_plist, heartbeat_plist};
+use rsrsbar::{Launchd, Paths, Recording, app_plist, heartbeat_plist};
 
 const BUNDLE: &str = "/Users/t/Applications/rsrsbar.app";
 
@@ -99,7 +99,9 @@ fn start_then_stop_order() {
     assert_eq!(
         launchd.calls(),
         [
+            "enable com.nicecab.rsrsbar".to_owned(),
             format!("bootstrap {}", app.display()),
+            "enable com.nicecab.rsrsbar.heartbeat".to_owned(),
             format!("bootstrap {}", heartbeat.display()),
         ]
     );
@@ -110,7 +112,7 @@ fn start_then_stop_order() {
     // Already loaded: restarted rather than bootstrapped twice.
     start(&ctx).expect("start again");
     assert_eq!(
-        launchd.calls()[2..],
+        launchd.calls()[4..],
         [
             "kickstart com.nicecab.rsrsbar".to_owned(),
             "kickstart com.nicecab.rsrsbar.heartbeat".to_owned(),
@@ -120,11 +122,24 @@ fn start_then_stop_order() {
     let report = stop(&ctx).expect("stop");
     assert_eq!(report.text, "rsrsbar stopped; repositories keep syncing");
     assert_eq!(
-        launchd.calls()[4..],
+        launchd.calls()[6..],
         [
             "bootout com.nicecab.rsrsbar.heartbeat".to_owned(),
+            "disable com.nicecab.rsrsbar.heartbeat".to_owned(),
             "bootout com.nicecab.rsrsbar".to_owned(),
+            "disable com.nicecab.rsrsbar".to_owned(),
         ]
+    );
+    // Login loads neither agent while they are disabled; start enables them.
+    assert!(launchd.bootstrap(&app).is_err());
+    assert!(launchd.bootstrap(&heartbeat).is_err());
+    start(&ctx).expect("start after stop");
+    assert!(launchd.job("com.nicecab.rsrsbar").expect("job").is_some());
+    assert!(
+        launchd
+            .job("com.nicecab.rsrsbar.heartbeat")
+            .expect("job")
+            .is_some()
     );
 }
 
@@ -143,7 +158,7 @@ fn start_reloads_a_changed_plist() {
     };
     start(&moved).expect("start from the moved bundle");
     assert_eq!(
-        launchd.calls()[2..],
+        launchd.calls()[4..],
         [
             "bootout com.nicecab.rsrsbar".to_owned(),
             format!(
@@ -166,7 +181,7 @@ fn start_reloads_a_changed_plist() {
     // Unchanged since: a plain restart.
     start(&moved).expect("start again");
     assert_eq!(
-        launchd.calls()[6..],
+        launchd.calls()[8..],
         [
             "kickstart com.nicecab.rsrsbar".to_owned(),
             "kickstart com.nicecab.rsrsbar.heartbeat".to_owned(),
@@ -201,8 +216,11 @@ fn failed_reload_is_retried() {
     start(&moved).expect("retry");
     let retry = &launchd.calls()[calls_before..];
     assert_eq!(
-        retry.first().map(String::as_str),
-        Some(format!("bootstrap {}", app.display()).as_str()),
+        retry[..2],
+        [
+            "enable com.nicecab.rsrsbar".to_owned(),
+            format!("bootstrap {}", app.display())
+        ],
         "{retry:?}"
     );
     assert!(
